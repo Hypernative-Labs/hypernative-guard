@@ -1,0 +1,7 @@
+// 1. remove timelock - Done
+// 2. invalidate hash - Done
+// 3. trigger instead of enable - DONE
+// 4. trigger timelock always approved - done
+// 5. untrigger timelock always approved - cancel the enable timelock transaction - Done
+// 6. should we invalidate hash after transaction execution
+// 7. will nonce free transaction will always be valid? - better invalidate hash after transaction execution
