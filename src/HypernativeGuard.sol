@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.25;
 
 import {BaseGuard} from  "@safe/contracts/base/GuardManager.sol";
 import {Safe} from "@safe/contracts/Safe.sol";
@@ -9,17 +9,19 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract HypernativeGuard is BaseGuard, Ownable {
     error UnapprovedHypernativeHash();
 
-
     address payable immutable public safeAddress;
     bytes32 immutable public revokingHash;
-    bytes32 immutable public timelockHash;
+    bytes32 immutable public activateTimelockHash;
     bytes32 immutable public disableTimelockHash;
     uint256 internal timelockBlock;
     bool public isTimelockTriggered;
     mapping(bytes32 nonceFreeTxHash => bool) public hypernativeApprovedNonceFreeTxHashes;
     mapping(bytes32 txHash => bool) public hypernativeApprovedTxHashes;
 
-    event TimelockTriggered(uint256 timestamp);
+    event TimelockActivated(uint256 timestamp);
+    event TimelockDisabled(uint256 timestamp);
+    event uintEvent(uint256);
+    event addressEvent(address);
 
     modifier onlyGuardedSafe() {
         require(
@@ -32,8 +34,7 @@ contract HypernativeGuard is BaseGuard, Ownable {
     constructor(address payable _safeAddress, bytes32 _revokingHash) {
         safeAddress = _safeAddress;
         revokingHash = _revokingHash;
-        //bytes memory selector = abi.encodeWithSelector(HypernativeGuard(address(0)).triggerTimelock.selector);
-        timelockHash = keccak256(abi.encode(address(this), 0, keccak256(abi.encodeWithSelector(this.triggerTimelock.selector)), Enum.Operation.Call, 0, 0, 0, address(0), payable(0)));
+        activateTimelockHash = keccak256(abi.encode(address(this), 0, keccak256(abi.encodeWithSelector(this.activateTimelock.selector)), Enum.Operation.Call, 0, 0, 0, address(0), payable(0)));
         disableTimelockHash = keccak256(abi.encode(address(this), 0, keccak256(abi.encodeWithSelector(this.disableTimelock.selector)), Enum.Operation.Call, 0, 0, 0, address(0), payable(0)));
     }
 
@@ -49,7 +50,7 @@ contract HypernativeGuard is BaseGuard, Ownable {
         // solhint-disable-next-line no-unused-vars
         address payable refundReceiver,
         bytes memory, /*signatures*/
-        address /*executor TODO: Should I use it in order to make sure safeTx remains private? (only parties can initiate) - so i can check if address in in owners*/
+        address /*executor*/
     ) external override onlyGuardedSafe {
         Safe safe = Safe(safeAddress);       
         bytes32 nonceFreeTxHash = getNonceFreeTransactionHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
@@ -57,12 +58,9 @@ contract HypernativeGuard is BaseGuard, Ownable {
 
         if (nonceFreeTxHash == revokingHash) {
             require(isTimelockTriggered, "Timelock sequence wasn't initiated");
-            require(block.timestamp >= timelockBlock, "Timelock wasn't completed yet");
+            require(block.timestamp > timelockBlock, "Timelock wasn't completed yet");
         }
-        else if (nonceFreeTxHash == disableTimelockHash) {
-            isTimelockTriggered = false;
-        }
-        else if (nonceFreeTxHash == timelockHash) {
+        else if ((nonceFreeTxHash == disableTimelockHash) || (nonceFreeTxHash == activateTimelockHash)) {
             return;
         }
         else  {
@@ -103,14 +101,14 @@ contract HypernativeGuard is BaseGuard, Ownable {
         return keccak256(abi.encode(to, value, keccak256(data), operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver));
     }
 
-    function triggerTimelock() public onlyGuardedSafe {
+    function activateTimelock() public onlyGuardedSafe {
         isTimelockTriggered = true;
         timelockBlock = block.timestamp + 3 days;
-        emit TimelockTriggered(block.timestamp);
+        emit TimelockActivated(block.timestamp);
     }
 
     function disableTimelock() public onlyGuardedSafe {
         isTimelockTriggered = false;
+        emit TimelockDisabled(block.timestamp);
     }
-
 }
