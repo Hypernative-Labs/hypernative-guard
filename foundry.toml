@@ -8,6 +8,7 @@ remappings = ['@safe=lib/safe-contracts/', '@openzeppelin=lib/openzeppelin-contr
 goerli = "${GOERLI_RPC_URL}"
 sepolia = "${SEPOLIA_RPC_URL}"
 mainnet = "${MAINNET_RPC_URL}"
+base = "${BASE_RPC_URL}"
 
 
 [etherscan]
