@@ -310,11 +310,11 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
 
     /**
      * @notice Activates the timelock sequence
-     * @dev Sets the timelock expiration time to 3 days from now
+     * @dev Sets the timelock expiration time to 1 days from now
      */
     function activateTimelock() public onlyGuardedSafe {
         isTimelockTriggered = true;
-        timelockBlock = block.timestamp + 3 days;
+        timelockBlock = block.timestamp + 1 days;
         emit TimelockActivated(block.timestamp);
     }
 
