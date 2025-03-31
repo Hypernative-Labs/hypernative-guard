@@ -349,6 +349,15 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     }
 
     /**
+     * @notice Revokes the keeper role from an address
+     * @dev Can only be called by the Safe contract
+     * @param _keeper Address to revoke the keeper role from
+     */
+    function revokeKeeperRole(address _keeper) public onlyGuardedSafe {
+        _revokeRole(KEEPER_ROLE, _keeper);
+    }
+
+    /**
      * @notice Returns the timestamp when the timelock expires
      * @dev Returns 0 if the timelock is not currently triggered
      * @return The timestamp of the timelock expiration, or 0 if inactive

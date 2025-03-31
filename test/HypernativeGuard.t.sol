@@ -369,7 +369,7 @@ contract HypernativeGuardTest is Test {
         );
     }
 
-    function test_GrantKeeperRole() public {
+    function test_GrantAndRevokeKeeperRole() public {
         testConfigureHypernativeGuard();
         // grant the keeper role to address(1)
         SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign();
@@ -403,7 +403,7 @@ contract HypernativeGuardTest is Test {
         signatures = signTransaction(digest);
 
         // aprove the hash through address(1) which has the keeper role
-        vm.startPrank(address(1));
+        vm.prank(address(1));
         hypernativeGuard.approveHash(digest);
         safe.execTransaction(
             safeTx.to,
@@ -417,6 +417,31 @@ contract HypernativeGuardTest is Test {
             safeTx.refundReceiver,
             signatures
         );
+
+        safeTx = generateRevokeKeeperTxToSign();
+        digest = sigUtils.getTypedDataHash(safeTx);
+        signatures = signTransaction(digest);
+        vm.stopPrank();
+        hypernativeGuard.approveHash(digest);
+        // revoke the keeper role from address(1)
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+
+        bytes32 payload = keccak256(abi.encodePacked(address(1), uint256(0)));
+
+        vm.startPrank(address(1));
+        vm.expectRevert();
+        hypernativeGuard.approveHash(payload);
     }
 
     function test_PolicyExtension() public {
@@ -749,6 +774,22 @@ contract HypernativeGuardTest is Test {
             to: address(hypernativeGuard),
             value: 0,
             data: abi.encodeWithSelector(HypernativeGuard.grantKeeperRole.selector, address(1)),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    function generateRevokeKeeperTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.revokeKeeperRole.selector, address(1)),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
