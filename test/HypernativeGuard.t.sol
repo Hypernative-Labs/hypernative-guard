@@ -601,66 +601,6 @@ contract HypernativeGuardTest is Test {
         );
     }
 
-    function test_ChangeTimelockDuration() public {
-        testConfigureHypernativeGuard();
-        SigUtils.SafeTx memory safeTx = generateChangeTimethresholdTxToSign();
-        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
-        bytes memory signatures = signTransaction(digest);
-        vm.stopPrank();
-        hypernativeGuard.approveHash(digest);
-        vm.startPrank(signer1);
-        safe.execTransaction(
-            safeTx.to,
-            safeTx.value,
-            safeTx.data,
-            safeTx.operation,
-            safeTx.safeTxGas,
-            safeTx.baseGas,
-            safeTx.gasPrice,
-            safeTx.gasToken,
-            safeTx.refundReceiver,
-            signatures
-        );
-
-        safeTx = generateGuardTimelockTxToSign();
-        digest = sigUtils.getTypedDataHash(safeTx);
-        signatures = signTransaction(digest);
-        safe.execTransaction(
-            safeTx.to,
-            safeTx.value,
-            safeTx.data,
-            safeTx.operation,
-            safeTx.safeTxGas,
-            safeTx.baseGas,
-            safeTx.gasPrice,
-            safeTx.gasToken,
-            safeTx.refundReceiver,
-            signatures
-        );
-
-        vm.warp(block.timestamp + 11 hours);
-
-        safeTx = generateRevokeGuardTxToSign();
-        digest = sigUtils.getTypedDataHash(safeTx);
-        signatures = signTransaction(digest);
-        safe.execTransaction(
-            safeTx.to,
-            safeTx.value,
-            safeTx.data,
-            safeTx.operation,
-            safeTx.safeTxGas,
-            safeTx.baseGas,
-            safeTx.gasPrice,
-            safeTx.gasToken,
-            safeTx.refundReceiver,
-            signatures
-        );
-
-        test_WithdrawEth();
-        
-    }
-
-
     function generateAndApproveRevokeGuardTx()
         internal
         returns (SigUtils.SafeTx memory safeTx, bytes memory signatures)
@@ -865,25 +805,6 @@ contract HypernativeGuardTest is Test {
             nonce: safe.nonce()
         });
         return safeTx;
-    }
-
-    function generateChangeTimethresholdTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
-        safeTx = SigUtils.SafeTx({
-            to: address(hypernativeGuard),
-            value: 0,
-            data: abi.encodeWithSelector(
-                HypernativeGuard.changeTimelockDuration.selector, 10 hours
-            ),
-            operation: Enum.Operation.Call,
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: 0,
-            gasToken: address(0),
-            refundReceiver: payable(0),
-            nonce: safe.nonce()
-        });
-        return safeTx;
-
     }
 
     function signTransaction(bytes32 digest) internal view returns (bytes memory signatures) {

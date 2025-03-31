@@ -35,9 +35,6 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     /// @dev Timestamp when the timelock expires
     uint256 internal timelockBlock;
 
-    /// @dev Duration of the timelock sequence in seconds
-    uint256 public timelockDuration;
-
     /// @notice Whether the timelock sequence has been triggered
     bool public isTimelockTriggered;
 
@@ -124,7 +121,6 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _revokingHash The hash that identifies the HypernativeGuard revocation operations
      */
     constructor(address payable _safeAddress, bytes32 _revokingHash) {
-        timelockDuration = 1 days;
         _grantRole(KEEPER_ROLE, msg.sender);
         safeAddress = _safeAddress;
         revokingHash = _revokingHash;
@@ -312,21 +308,14 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         }
     }
 
-    /**
-     * @notice Changes the duration of the timelock sequence
-     * @dev Can only be called by the Safe contract
-     */
-    function changeTimelockDuration(uint256 _timelockDuration) public onlyGuardedSafe {
-        timelockDuration = _timelockDuration;
-    }
 
     /**
      * @notice Activates the timelock sequence
-     * @dev Sets the timelock expiration time to timelockDuration seconds from the current block timestamp 
+     * @dev Sets the timelock expiration time to 1 day from the current block timestamp 
      */
     function activateTimelock() public onlyGuardedSafe {
         isTimelockTriggered = true;
-        timelockBlock = block.timestamp + timelockDuration;
+        timelockBlock = block.timestamp + 1 days;
         emit TimelockActivated(block.timestamp);
     }
 
