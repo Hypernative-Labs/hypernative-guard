@@ -297,7 +297,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @dev Uses swap-and-pop pattern for efficient removal, can only be called by the Safe
      * @param _policyExtension Address of the policy extension to remove
      */
-    function removePolicyExtension(address _policyExtension) public onlyGuardedSafe {
+    function removePolicyExtension(address _policyExtension) public onlyKeeper {
         for (uint256 i = 0; i < policyExtensions.length; ++i) {
             if (policyExtensions[i] == _policyExtension) {
                 policyExtensions[i] = policyExtensions[policyExtensions.length - 1];

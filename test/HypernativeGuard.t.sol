@@ -372,7 +372,7 @@ contract HypernativeGuardTest is Test {
     function test_GrantAndRevokeKeeperRole() public {
         testConfigureHypernativeGuard();
         // grant the keeper role to address(1)
-        SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign();
+        SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign(address(1));
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
 
@@ -518,7 +518,28 @@ contract HypernativeGuardTest is Test {
             signatures
         );
 
+        // grant the keeper role to the Safe address
+        safeTx = generateGrantKeeperTxToSign(address(safe));
+        digest = sigUtils.getTypedDataHash(safeTx);
+        vm.stopPrank();
+        hypernativeGuard.approveHash(digest);
+        signatures = signTransaction(digest);
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+
+
         // now we'll remove the policy and try again
+        vm.startPrank(signer1);
         safeTx = generateRemovePolicyTransactionToSign();
         digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
@@ -709,11 +730,11 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateGrantKeeperTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateGrantKeeperTxToSign(address _keeper) internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(hypernativeGuard),
             value: 0,
-            data: abi.encodeWithSelector(HypernativeGuard.grantKeeperRole.selector, address(1)),
+            data: abi.encodeWithSelector(HypernativeGuard.grantKeeperRole.selector, address(_keeper)),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
