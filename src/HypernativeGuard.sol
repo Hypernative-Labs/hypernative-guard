@@ -202,7 +202,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         // if the transaction is a Guard change or revoke operation, check timelock status
         // the revokingHash was set during contract deployment and is used to identify these operations 
         if (functionCallTxHash == revokingHash) {
-            require(isTimelockTriggered, "Timelock sequence wasn't initiated");
+            require(timelockBlock > 0 && isTimelockTriggered, "Timelock sequence wasn't initiated");
             require(block.timestamp > timelockBlock, "Timelock wasn't completed yet");
             return;
         } else if (
@@ -325,6 +325,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      */
     function disableTimelock() public onlyGuardedSafe {
         isTimelockTriggered = false;
+        timelockBlock = 0;
         emit TimelockDisabled(block.timestamp);
     }
 
