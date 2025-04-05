@@ -25,6 +25,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     error TimelockNotTriggered();
     error TimelockNotCompleted();
 
+    error PolicyExtensionNotValid();
     error PolicyExtensionNotFound();
     error PolicyExtensionAlreadyExists();
 
@@ -211,7 +212,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
             getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
 
         // if the transaction is a Guard change or revoke operation, check timelock status
-        // the revokingHash was set during contract deployment and is used to identify these operations 
+        // the revokingHash was set during contract deployment and is used to identify these operations
         if (functionCallTxHash == revokingHash) {
             require(timelockBlock > 0 && isTimelockTriggered, TimelockNotTriggered());
             require(block.timestamp > timelockBlock, TimelockNotCompleted());
@@ -300,6 +301,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      */
     function addPolicyExtension(address _policyExtension) public onlyGuardedSafe {
         require(!policyExtensions.contains(_policyExtension), PolicyExtensionAlreadyExists());
+        require(
+            IGuardPolicyExtension(_policyExtension).supportsInterface(type(IGuardPolicyExtension).interfaceId),
+            PolicyExtensionNotValid()
+        );
         policyExtensions.add(_policyExtension);
         emit PolicyExtensionAdded(_policyExtension);
     }
@@ -314,10 +319,9 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         emit PolicyExtensionRemoved(_policyExtension);
     }
 
-
     /**
      * @notice Activates the timelock sequence
-     * @dev Sets the timelock expiration time to 1 day from the current block timestamp 
+     * @dev Sets the timelock expiration time to 1 day from the current block timestamp
      */
     function activateTimelock() public onlyGuardedSafe {
         isTimelockTriggered = true;

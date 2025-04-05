@@ -20,4 +20,8 @@ contract DelegateNotAllowedPolicy is IGuardPolicyExtension {
     ) external pure override {
         require(operation != Enum.Operation.DelegateCall, "Delegate call is not allowed");
     }
+
+    function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
+        return interfaceId == type(IGuardPolicyExtension).interfaceId;
+    }
 }

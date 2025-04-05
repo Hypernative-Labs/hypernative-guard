@@ -20,4 +20,8 @@ contract AddressZeroNotAllowedPolicy is IGuardPolicyExtension {
     ) external pure override {
         require(address(to) != address(0), "Address 0 is not allowed");
     }
+
+    function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
+        return interfaceId == type(IGuardPolicyExtension).interfaceId;
+    }
 }

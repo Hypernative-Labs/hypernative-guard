@@ -198,7 +198,7 @@ contract HypernativeGuardTest is Test {
         testConfigureHypernativeGuard();
         activateTimelock();
         (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveRevokeGuardTx();
-        vm.warp(block.timestamp +  10 hours);
+        vm.warp(block.timestamp + 10 hours);
         vm.expectRevert();
         safe.execTransaction(
             safeTx.to,
@@ -536,7 +536,6 @@ contract HypernativeGuardTest is Test {
             safeTx.refundReceiver,
             signatures
         );
-
 
         // now we'll remove the policy and try again
         vm.startPrank(signer1);
