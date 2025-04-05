@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
-import {Script}  from "forge-std/Script.sol";
-import  "../src/HypernativeGuard.sol";
+import {Script} from "forge-std/Script.sol";
+import "../src/HypernativeGuard.sol";
 import {Safe} from "@safe/contracts/Safe.sol";
 import {Enum} from "@safe/contracts/libraries/Enum.sol";
 import {GuardManager} from "@safe/contracts/base/GuardManager.sol";
 import {SigUtils} from "test/SigUtils.sol";
-
-
 
 contract HypernativeGuardScript is Script {
     bytes32 private _revokingHash;
@@ -24,13 +22,23 @@ contract HypernativeGuardScript is Script {
     event logBytes32(bytes32);
     event logBytes(bytes);
 
-    
-
     function setUp() public {
         string memory url = vm.rpcUrl("mainnet");
         vm.createSelectFork(url);
         safe = Safe(payable(0x57eCe8C3c65d125a29da90D8C9e5294Ba2D2e52c));
-        _revokingHash = keccak256(abi.encode(address(safe), 0, keccak256(abi.encodeWithSelector(GuardManager.setGuard.selector, address(0))), Enum.Operation.Call, 0, 0, 0, address(0), payable(0)));
+        _revokingHash = keccak256(
+            abi.encode(
+                address(safe),
+                0,
+                keccak256(abi.encodeWithSelector(GuardManager.setGuard.selector, address(0))),
+                Enum.Operation.Call,
+                0,
+                0,
+                0,
+                address(0),
+                payable(0)
+            )
+        );
         //emit logBytes32(_revokingHash);
         sigUtils = new SigUtils(safe.domainSeparator());
         _owner3PrivateKey = vm.envUint("SIGNER3");
@@ -48,24 +56,33 @@ contract HypernativeGuardScript is Script {
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         //emit logBytes32(digest);
         bytes memory signatures = signTransaction(digest);
-        //bytes memory callData = abi.encodeWithSelector(safe.execTransaction.selector, safeTx.to, safeTx.value, safeTx.data, safeTx.operation, safeTx.safeTxGas, safeTx.baseGas, safeTx.gasPrice, safeTx.gasToken, safeTx.refundReceiver, signatures);  
+        //bytes memory callData = abi.encodeWithSelector(safe.execTransaction.selector, safeTx.to, safeTx.value, safeTx.data, safeTx.operation, safeTx.safeTxGas, safeTx.baseGas, safeTx.gasPrice, safeTx.gasToken, safeTx.refundReceiver, signatures);
         //emit logBytes(callData);
         //bytes32 nonceFreeHash = hypernativeGuard.getNonceFreeTransactionHash(address(safe), 0, safeTx.data, safeTx.operation, safeTx.safeTxGas, safeTx.baseGas, safeTx.gasPrice, safeTx.gasToken, safeTx.refundReceiver);
         //emit logBytes32(nonceFreeHash);
-        safe.execTransaction(safeTx.to, safeTx.value, safeTx.data, safeTx.operation, safeTx.safeTxGas, safeTx.baseGas, safeTx.gasPrice, safeTx.gasToken, safeTx.refundReceiver, signatures);
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
     }
-
 
     function signTransaction(bytes32 digest) internal view returns (bytes memory signatures) {
         for (uint256 i; i < ownerPKs.length; ++i) {
             uint256 pk = ownerPKs[i];
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
-            signatures = bytes.concat(signatures, abi.encodePacked(r,s,v));
+            signatures = bytes.concat(signatures, abi.encodePacked(r, s, v));
         }
     }
 
-
-    function generateConfigureGuardTxToSign() internal view returns (SigUtils.SafeTx memory safeTx)  {
+    function generateConfigureGuardTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(safe),
             value: 0,
