@@ -4,7 +4,7 @@ pragma solidity ^0.8.25;
 import {Script}  from "forge-std/Script.sol";
 import  "../src/HypernativeGuard.sol";
 import {Safe} from "@safe/contracts/Safe.sol";
-import {Enum} from "@safe/contracts/common/Enum.sol";
+import {Enum} from "@safe/contracts/libraries/Enum.sol";
 import {GuardManager} from "@safe/contracts/base/GuardManager.sol";
 import {SigUtils} from "test/SigUtils.sol";
 

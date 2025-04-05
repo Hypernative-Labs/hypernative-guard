@@ -24,9 +24,9 @@ contract HypernativeGuardDeploymentScript is Script {
 
     function setUp() public {
         string memory url = vm.rpcUrl("sepolia");
-        string memory safeAddress = vm.env("SAFE_ADDRESS");
+        address safeAddress = vm.envAddress("SAFE_ADDRESS");
         vm.createSelectFork(url);
-        safe = Safe(payable());
+        safe = Safe(payable(safeAddress));
         _revokingHash = keccak256(
             abi.encode(
                 address(safe),
