@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Safe} from "@safe/contracts/Safe.sol";
 import {Enum} from "@safe/contracts/libraries/Enum.sol";
 import {BaseTransactionGuard, ITransactionGuard, GuardManager} from "@safe/contracts/base/GuardManager.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
 
 /**
@@ -14,6 +15,8 @@ import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
  * @dev Extends BaseTransactionGuard and implements AccessControl for role-based management
  */
 contract HypernativeGuard is BaseTransactionGuard, AccessControl {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     error UnapprovedHash();
 
     /// @notice Address of the Safe wallet this guard is attached to
@@ -48,7 +51,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     mapping(bytes32 functionCallTxHash => bool) public approvedFunctionCallHashes;
 
     /// @dev Array of policy extension contract addresses that provide additional validation logic
-    address[] internal policyExtensions;
+    EnumerableSet.AddressSet internal policyExtensions;
 
     /**
      * @notice Types of transaction hashes that can be approved
@@ -183,12 +186,11 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         address /*executor*/
     ) external view override onlyGuardedSafe {
         // process policy extensions
-        for (uint256 i = 0; i < policyExtensions.length; ++i) {
-            IGuardPolicyExtension(policyExtensions[i]).checkPolicy(
+        for (uint256 i = 0; i < policyExtensions.length(); ++i) {
+            IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
                 to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, "", address(0)
             );
         }
-
         Safe safe = Safe(safeAddress);
         bytes32 txHash = safe.getTransactionHash(
             to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
@@ -288,7 +290,8 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to add
      */
     function addPolicyExtension(address _policyExtension) public onlyGuardedSafe {
-        policyExtensions.push(_policyExtension);
+        require(!policyExtensions.contains(_policyExtension), "Policy extension already exists");
+        policyExtensions.add(_policyExtension);
         emit PolicyExtensionAdded(_policyExtension);
     }
 
@@ -298,14 +301,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to remove
      */
     function removePolicyExtension(address _policyExtension) public onlyKeeper {
-        for (uint256 i = 0; i < policyExtensions.length; ++i) {
-            if (policyExtensions[i] == _policyExtension) {
-                policyExtensions[i] = policyExtensions[policyExtensions.length - 1];
-                policyExtensions.pop();
-                emit PolicyExtensionRemoved(_policyExtension);
-                break;
-            }
-        }
+        require(policyExtensions.contains(_policyExtension), "Policy extension does not exist");
+        bool removed = policyExtensions.remove(_policyExtension);
+        require(removed, "Policy extension removal failed");
+        emit PolicyExtensionRemoved(_policyExtension);
     }
 
 
@@ -361,7 +360,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @return Array of policy extension addresses
      */
     function getPolicyExtensions() public view returns (address[] memory) {
-        return policyExtensions;
+        return policyExtensions.values();
     }
 
     /**
