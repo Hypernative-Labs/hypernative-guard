@@ -179,7 +179,7 @@ contract HypernativeGuardTest is Test {
         testConfigureHypernativeGuard();
         (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveRevokeGuardTx();
         vm.startPrank(signer1);
-        vm.expectRevert("Timelock sequence wasn't initiated");
+        vm.expectRevert(HypernativeGuard.TimelockNotTriggered.selector);
         safe.execTransaction(
             safeTx.to,
             safeTx.value,

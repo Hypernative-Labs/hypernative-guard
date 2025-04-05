@@ -17,7 +17,16 @@ import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
 contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     using EnumerableSet for EnumerableSet.AddressSet;
 
+    error OnlySafe();
+    error OnlyKeeper();
+
     error UnapprovedHash();
+
+    error TimelockNotTriggered();
+    error TimelockNotCompleted();
+
+    error PolicyExtensionNotFound();
+    error PolicyExtensionAlreadyExists();
 
     /// @notice Address of the Safe wallet this guard is attached to
     /// @dev Immutable and set during contract deployment
@@ -105,7 +114,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @dev Restricts function access to accounts with the keeper role
      */
     modifier onlyKeeper() {
-        require(hasRole(KEEPER_ROLE, msg.sender), "Caller is not a keeper");
+        require(hasRole(KEEPER_ROLE, msg.sender), OnlyKeeper());
         _;
     }
 
@@ -113,7 +122,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @dev Restricts function access to the guarded Safe contract
      */
     modifier onlyGuardedSafe() {
-        require(msg.sender == safeAddress, "Only Safe is allowed to call.");
+        require(msg.sender == safeAddress, OnlySafe());
         _;
     }
 
@@ -204,8 +213,8 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         // if the transaction is a Guard change or revoke operation, check timelock status
         // the revokingHash was set during contract deployment and is used to identify these operations 
         if (functionCallTxHash == revokingHash) {
-            require(timelockBlock > 0 && isTimelockTriggered, "Timelock sequence wasn't initiated");
-            require(block.timestamp > timelockBlock, "Timelock wasn't completed yet");
+            require(timelockBlock > 0 && isTimelockTriggered, TimelockNotTriggered());
+            require(block.timestamp > timelockBlock, TimelockNotCompleted());
             return;
         } else if (
             approvedTxHashes[txHash] || approvedNonceFreeTxHashes[nonceFreeTxHash]
@@ -290,20 +299,18 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to add
      */
     function addPolicyExtension(address _policyExtension) public onlyGuardedSafe {
-        require(!policyExtensions.contains(_policyExtension), "Policy extension already exists");
+        require(!policyExtensions.contains(_policyExtension), PolicyExtensionAlreadyExists());
         policyExtensions.add(_policyExtension);
         emit PolicyExtensionAdded(_policyExtension);
     }
 
     /**
      * @notice Removes a policy extension from the guard
-     * @dev Uses swap-and-pop pattern for efficient removal, can only be called by the Safe
      * @param _policyExtension Address of the policy extension to remove
      */
     function removePolicyExtension(address _policyExtension) public onlyKeeper {
-        require(policyExtensions.contains(_policyExtension), "Policy extension does not exist");
-        bool removed = policyExtensions.remove(_policyExtension);
-        require(removed, "Policy extension removal failed");
+        require(policyExtensions.contains(_policyExtension), PolicyExtensionNotFound());
+        policyExtensions.remove(_policyExtension);
         emit PolicyExtensionRemoved(_policyExtension);
     }
 
