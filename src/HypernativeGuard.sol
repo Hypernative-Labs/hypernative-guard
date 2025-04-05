@@ -182,13 +182,13 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         address gasToken,
         // solhint-disable-next-line no-unused-vars
         address payable refundReceiver,
-        bytes memory, /*signatures*/
-        address /*executor*/
+        bytes memory signatures,
+        address executor
     ) external view override onlyGuardedSafe {
         // process policy extensions
         for (uint256 i = 0; i < policyExtensions.length(); ++i) {
             IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
-                to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, "", address(0)
+                to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures, executor
             );
         }
         Safe safe = Safe(safeAddress);
