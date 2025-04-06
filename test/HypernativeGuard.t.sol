@@ -179,7 +179,7 @@ contract HypernativeGuardTest is Test {
         testConfigureHypernativeGuard();
         (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveRevokeGuardTx();
         vm.startPrank(signer1);
-        vm.expectRevert("Timelock sequence wasn't initiated");
+        vm.expectRevert(HypernativeGuard.TimelockNotTriggered.selector);
         safe.execTransaction(
             safeTx.to,
             safeTx.value,
@@ -198,7 +198,7 @@ contract HypernativeGuardTest is Test {
         testConfigureHypernativeGuard();
         activateTimelock();
         (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveRevokeGuardTx();
-        vm.warp(block.timestamp +  10 hours);
+        vm.warp(block.timestamp + 10 hours);
         vm.expectRevert();
         safe.execTransaction(
             safeTx.to,
@@ -369,10 +369,10 @@ contract HypernativeGuardTest is Test {
         );
     }
 
-    function test_GrantKeeperRole() public {
+    function test_GrantAndRevokeKeeperRole() public {
         testConfigureHypernativeGuard();
         // grant the keeper role to address(1)
-        SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign();
+        SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign(address(1));
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
 
@@ -403,7 +403,7 @@ contract HypernativeGuardTest is Test {
         signatures = signTransaction(digest);
 
         // aprove the hash through address(1) which has the keeper role
-        vm.startPrank(address(1));
+        vm.prank(address(1));
         hypernativeGuard.approveHash(digest);
         safe.execTransaction(
             safeTx.to,
@@ -417,6 +417,31 @@ contract HypernativeGuardTest is Test {
             safeTx.refundReceiver,
             signatures
         );
+
+        safeTx = generateRevokeKeeperTxToSign();
+        digest = sigUtils.getTypedDataHash(safeTx);
+        signatures = signTransaction(digest);
+        vm.stopPrank();
+        hypernativeGuard.approveHash(digest);
+        // revoke the keeper role from address(1)
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+
+        bytes32 payload = keccak256(abi.encodePacked(address(1), uint256(0)));
+
+        vm.startPrank(address(1));
+        vm.expectRevert();
+        hypernativeGuard.approveHash(payload);
     }
 
     function test_PolicyExtension() public {
@@ -493,7 +518,27 @@ contract HypernativeGuardTest is Test {
             signatures
         );
 
+        // grant the keeper role to the Safe address
+        safeTx = generateGrantKeeperTxToSign(address(safe));
+        digest = sigUtils.getTypedDataHash(safeTx);
+        vm.stopPrank();
+        hypernativeGuard.approveHash(digest);
+        signatures = signTransaction(digest);
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+
         // now we'll remove the policy and try again
+        vm.startPrank(signer1);
         safeTx = generateRemovePolicyTransactionToSign();
         digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
@@ -575,66 +620,6 @@ contract HypernativeGuardTest is Test {
             signatures
         );
     }
-
-    function test_ChangeTimelockDuration() public {
-        testConfigureHypernativeGuard();
-        SigUtils.SafeTx memory safeTx = generateChangeTimethresholdTxToSign();
-        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
-        bytes memory signatures = signTransaction(digest);
-        vm.stopPrank();
-        hypernativeGuard.approveHash(digest);
-        vm.startPrank(signer1);
-        safe.execTransaction(
-            safeTx.to,
-            safeTx.value,
-            safeTx.data,
-            safeTx.operation,
-            safeTx.safeTxGas,
-            safeTx.baseGas,
-            safeTx.gasPrice,
-            safeTx.gasToken,
-            safeTx.refundReceiver,
-            signatures
-        );
-
-        safeTx = generateGuardTimelockTxToSign();
-        digest = sigUtils.getTypedDataHash(safeTx);
-        signatures = signTransaction(digest);
-        safe.execTransaction(
-            safeTx.to,
-            safeTx.value,
-            safeTx.data,
-            safeTx.operation,
-            safeTx.safeTxGas,
-            safeTx.baseGas,
-            safeTx.gasPrice,
-            safeTx.gasToken,
-            safeTx.refundReceiver,
-            signatures
-        );
-
-        vm.warp(block.timestamp + 11 hours);
-
-        safeTx = generateRevokeGuardTxToSign();
-        digest = sigUtils.getTypedDataHash(safeTx);
-        signatures = signTransaction(digest);
-        safe.execTransaction(
-            safeTx.to,
-            safeTx.value,
-            safeTx.data,
-            safeTx.operation,
-            safeTx.safeTxGas,
-            safeTx.baseGas,
-            safeTx.gasPrice,
-            safeTx.gasToken,
-            safeTx.refundReceiver,
-            signatures
-        );
-
-        test_WithdrawEth();
-        
-    }
-
 
     function generateAndApproveRevokeGuardTx()
         internal
@@ -744,11 +729,27 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateGrantKeeperTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateGrantKeeperTxToSign(address _keeper) internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(hypernativeGuard),
             value: 0,
-            data: abi.encodeWithSelector(HypernativeGuard.grantKeeperRole.selector, address(1)),
+            data: abi.encodeWithSelector(HypernativeGuard.grantKeeperRole.selector, address(_keeper)),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    function generateRevokeKeeperTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.revokeKeeperRole.selector, address(1)),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
@@ -824,25 +825,6 @@ contract HypernativeGuardTest is Test {
             nonce: safe.nonce()
         });
         return safeTx;
-    }
-
-    function generateChangeTimethresholdTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
-        safeTx = SigUtils.SafeTx({
-            to: address(hypernativeGuard),
-            value: 0,
-            data: abi.encodeWithSelector(
-                HypernativeGuard.changeTimelockDuration.selector, 10 hours
-            ),
-            operation: Enum.Operation.Call,
-            safeTxGas: 0,
-            baseGas: 0,
-            gasPrice: 0,
-            gasToken: address(0),
-            refundReceiver: payable(0),
-            nonce: safe.nonce()
-        });
-        return safeTx;
-
     }
 
     function signTransaction(bytes32 digest) internal view returns (bytes memory signatures) {

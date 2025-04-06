@@ -37,4 +37,11 @@ interface IGuardPolicyExtension {
         bytes memory signatures,
         address executor
     ) external view;
+
+    /**
+     * @notice Checks if the contract supports a specific interface
+     * @param interfaceId The interface identifier, as specified in ERC-165
+     * @return True if the contract implements the interface defined by `interfaceId`, false otherwise
+     */
+    function supportsInterface(bytes4 interfaceId) external view returns (bool);
 }

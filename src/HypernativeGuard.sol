@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Safe} from "@safe/contracts/Safe.sol";
 import {Enum} from "@safe/contracts/libraries/Enum.sol";
 import {BaseTransactionGuard, ITransactionGuard, GuardManager} from "@safe/contracts/base/GuardManager.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
 
 /**
@@ -14,7 +15,19 @@ import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
  * @dev Extends BaseTransactionGuard and implements AccessControl for role-based management
  */
 contract HypernativeGuard is BaseTransactionGuard, AccessControl {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    error OnlySafe();
+    error OnlyKeeper();
+
     error UnapprovedHash();
+
+    error TimelockNotTriggered();
+    error TimelockNotCompleted();
+
+    error PolicyExtensionNotValid();
+    error PolicyExtensionNotFound();
+    error PolicyExtensionAlreadyExists();
 
     /// @notice Address of the Safe wallet this guard is attached to
     /// @dev Immutable and set during contract deployment
@@ -35,9 +48,6 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     /// @dev Timestamp when the timelock expires
     uint256 internal timelockBlock;
 
-    /// @dev Duration of the timelock sequence in seconds
-    uint256 public timelockDuration;
-
     /// @notice Whether the timelock sequence has been triggered
     bool public isTimelockTriggered;
 
@@ -51,7 +61,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     mapping(bytes32 functionCallTxHash => bool) public approvedFunctionCallHashes;
 
     /// @dev Array of policy extension contract addresses that provide additional validation logic
-    address[] internal policyExtensions;
+    EnumerableSet.AddressSet internal policyExtensions;
 
     /**
      * @notice Types of transaction hashes that can be approved
@@ -105,7 +115,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @dev Restricts function access to accounts with the keeper role
      */
     modifier onlyKeeper() {
-        require(hasRole(KEEPER_ROLE, msg.sender), "Caller is not a keeper");
+        require(hasRole(KEEPER_ROLE, msg.sender), OnlyKeeper());
         _;
     }
 
@@ -113,7 +123,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @dev Restricts function access to the guarded Safe contract
      */
     modifier onlyGuardedSafe() {
-        require(msg.sender == safeAddress, "Only Safe is allowed to call.");
+        require(msg.sender == safeAddress, OnlySafe());
         _;
     }
 
@@ -124,7 +134,6 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _revokingHash The hash that identifies the HypernativeGuard revocation operations
      */
     constructor(address payable _safeAddress, bytes32 _revokingHash) {
-        timelockDuration = 1 days;
         _grantRole(KEEPER_ROLE, msg.sender);
         safeAddress = _safeAddress;
         revokingHash = _revokingHash;
@@ -183,16 +192,15 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         address gasToken,
         // solhint-disable-next-line no-unused-vars
         address payable refundReceiver,
-        bytes memory, /*signatures*/
-        address /*executor*/
+        bytes memory signatures,
+        address executor
     ) external view override onlyGuardedSafe {
         // process policy extensions
-        for (uint256 i = 0; i < policyExtensions.length; ++i) {
-            IGuardPolicyExtension(policyExtensions[i]).checkPolicy(
-                to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, "", address(0)
+        for (uint256 i = 0; i < policyExtensions.length(); ++i) {
+            IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
+                to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures, executor
             );
         }
-
         Safe safe = Safe(safeAddress);
         bytes32 txHash = safe.getTransactionHash(
             to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
@@ -204,10 +212,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
             getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
 
         // if the transaction is a Guard change or revoke operation, check timelock status
-        // the revokingHash was set during contract deployment and is used to identify these operations 
+        // the revokingHash was set during contract deployment and is used to identify these operations
         if (functionCallTxHash == revokingHash) {
-            require(isTimelockTriggered, "Timelock sequence wasn't initiated");
-            require(block.timestamp > timelockBlock, "Timelock wasn't completed yet");
+            require(timelockBlock > 0 && isTimelockTriggered, TimelockNotTriggered());
+            require(block.timestamp > timelockBlock, TimelockNotCompleted());
             return;
         } else if (
             approvedTxHashes[txHash] || approvedNonceFreeTxHashes[nonceFreeTxHash]
@@ -292,41 +300,32 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to add
      */
     function addPolicyExtension(address _policyExtension) public onlyGuardedSafe {
-        policyExtensions.push(_policyExtension);
+        require(!policyExtensions.contains(_policyExtension), PolicyExtensionAlreadyExists());
+        require(
+            IGuardPolicyExtension(_policyExtension).supportsInterface(type(IGuardPolicyExtension).interfaceId),
+            PolicyExtensionNotValid()
+        );
+        policyExtensions.add(_policyExtension);
         emit PolicyExtensionAdded(_policyExtension);
     }
 
     /**
      * @notice Removes a policy extension from the guard
-     * @dev Uses swap-and-pop pattern for efficient removal, can only be called by the Safe
      * @param _policyExtension Address of the policy extension to remove
      */
-    function removePolicyExtension(address _policyExtension) public onlyGuardedSafe {
-        for (uint256 i = 0; i < policyExtensions.length; ++i) {
-            if (policyExtensions[i] == _policyExtension) {
-                policyExtensions[i] = policyExtensions[policyExtensions.length - 1];
-                policyExtensions.pop();
-                emit PolicyExtensionRemoved(_policyExtension);
-                break;
-            }
-        }
-    }
-
-    /**
-     * @notice Changes the duration of the timelock sequence
-     * @dev Can only be called by the Safe contract
-     */
-    function changeTimelockDuration(uint256 _timelockDuration) public onlyGuardedSafe {
-        timelockDuration = _timelockDuration;
+    function removePolicyExtension(address _policyExtension) public onlyKeeper {
+        require(policyExtensions.contains(_policyExtension), PolicyExtensionNotFound());
+        policyExtensions.remove(_policyExtension);
+        emit PolicyExtensionRemoved(_policyExtension);
     }
 
     /**
      * @notice Activates the timelock sequence
-     * @dev Sets the timelock expiration time to timelockDuration seconds from the current block timestamp 
+     * @dev Sets the timelock expiration time to 1 day from the current block timestamp
      */
     function activateTimelock() public onlyGuardedSafe {
         isTimelockTriggered = true;
-        timelockBlock = block.timestamp + timelockDuration;
+        timelockBlock = block.timestamp + 1 days;
         emit TimelockActivated(block.timestamp);
     }
 
@@ -336,6 +335,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      */
     function disableTimelock() public onlyGuardedSafe {
         isTimelockTriggered = false;
+        timelockBlock = 0;
         emit TimelockDisabled(block.timestamp);
     }
 
@@ -346,6 +346,15 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      */
     function grantKeeperRole(address _keeper) public onlyGuardedSafe {
         _grantRole(KEEPER_ROLE, _keeper);
+    }
+
+    /**
+     * @notice Revokes the keeper role from an address
+     * @dev Can only be called by the Safe contract
+     * @param _keeper Address to revoke the keeper role from
+     */
+    function revokeKeeperRole(address _keeper) public onlyGuardedSafe {
+        _revokeRole(KEEPER_ROLE, _keeper);
     }
 
     /**
@@ -362,7 +371,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @return Array of policy extension addresses
      */
     function getPolicyExtensions() public view returns (address[] memory) {
-        return policyExtensions;
+        return policyExtensions.values();
     }
 
     /**
