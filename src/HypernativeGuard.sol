@@ -300,12 +300,11 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to add
      */
     function addPolicyExtension(address _policyExtension) public onlyGuardedSafe {
-        require(!policyExtensions.contains(_policyExtension), PolicyExtensionAlreadyExists());
         require(
             IGuardPolicyExtension(_policyExtension).supportsInterface(type(IGuardPolicyExtension).interfaceId),
             PolicyExtensionNotValid()
         );
-        policyExtensions.add(_policyExtension);
+        require(policyExtensions.add(_policyExtension), PolicyExtensionAlreadyExists());
         emit PolicyExtensionAdded(_policyExtension);
     }
 
@@ -314,8 +313,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to remove
      */
     function removePolicyExtension(address _policyExtension) public onlyKeeper {
-        require(policyExtensions.contains(_policyExtension), PolicyExtensionNotFound());
-        policyExtensions.remove(_policyExtension);
+        require(policyExtensions.remove(), PolicyExtensionNotFound());
         emit PolicyExtensionRemoved(_policyExtension);
     }
 
