@@ -313,7 +313,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _policyExtension Address of the policy extension to remove
      */
     function removePolicyExtension(address _policyExtension) public onlyKeeper {
-        require(policyExtensions.remove(), PolicyExtensionNotFound());
+        require(policyExtensions.remove(_policyExtension), PolicyExtensionNotFound());
         emit PolicyExtensionRemoved(_policyExtension);
     }
 
