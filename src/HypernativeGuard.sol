@@ -164,8 +164,8 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
             )
         );
         // pre-approve timelock transaction hashes as nonce-free
-        approveNonceFreeHash(disableTimelockHash);
-        approveNonceFreeHash(activateTimelockHash);
+        approvedNonceFreeTxHashes[activateTimelockHash] = true;
+        approvedNonceFreeTxHashes[disableTimelockHash] = true;
     }
 
     /**
