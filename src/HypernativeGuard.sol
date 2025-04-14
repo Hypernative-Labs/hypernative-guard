@@ -133,8 +133,8 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _safeAddress The address of the Safe this guard will protect
      * @param _revokingHash The hash that identifies the HypernativeGuard revocation operations
      */
-    constructor(address payable _safeAddress, bytes32 _revokingHash) {
-        _grantRole(KEEPER_ROLE, msg.sender);
+    constructor(address payable _safeAddress, bytes32 _revokingHash, address _keeper) {
+        _grantRole(KEEPER_ROLE, _keeper);
         safeAddress = _safeAddress;
         revokingHash = _revokingHash;
         activateTimelockHash = keccak256(

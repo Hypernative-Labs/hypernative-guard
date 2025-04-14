@@ -51,7 +51,7 @@ contract HypernativeGuardScript is Script {
 
     function run() public {
         vm.startBroadcast();
-        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _revokingHash);
+        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _revokingHash, tx.origin);
         SigUtils.SafeTx memory safeTx = generateConfigureGuardTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         //emit logBytes32(digest);

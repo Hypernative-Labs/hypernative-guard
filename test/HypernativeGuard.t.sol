@@ -59,7 +59,7 @@ contract HypernativeGuardTest is Test {
                 payable(0)
             )
         );
-        hypernativeGuard = new HypernativeGuard(payable(safe), _changeGuardHash);
+        hypernativeGuard = new HypernativeGuard(payable(safe), _changeGuardHash, address(this));
         poolManager = new MockPoolManager(address(safe));
         addressZeroNotAllowedPolicy = new AddressZeroNotAllowedPolicy();
         vm.startPrank(signer1);

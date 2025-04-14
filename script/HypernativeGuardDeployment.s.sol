@@ -9,7 +9,7 @@ import {GuardManager} from "@safe/contracts/base/GuardManager.sol";
 import {SigUtils} from "test/SigUtils.sol";
 
 contract HypernativeGuardDeploymentScript is Script {
-    bytes32 private _revokingHash;
+    bytes32 private _changeGuardHash;
     Safe safe;
     HypernativeGuard hypernativeGuard;
     HypernativeGuard hypernativeOldGuard;
@@ -25,13 +25,16 @@ contract HypernativeGuardDeploymentScript is Script {
     function setUp() public {
         string memory url = vm.rpcUrl("sepolia");
         address safeAddress = vm.envAddress("SAFE_ADDRESS");
+        
         vm.createSelectFork(url);
         safe = Safe(payable(safeAddress));
-        _revokingHash = keccak256(
+
+        bytes memory setGuardData = abi.encodeWithSelector(GuardManager.setGuard.selector);
+        _changeGuardHash = keccak256(
             abi.encode(
                 address(safe),
                 0,
-                keccak256(abi.encodeWithSelector(GuardManager.setGuard.selector, address(0))),
+                keccak256((getFunctionSelector(setGuardData))),
                 Enum.Operation.Call,
                 0,
                 0,
@@ -45,6 +48,15 @@ contract HypernativeGuardDeploymentScript is Script {
 
     function run() public {
         vm.startBroadcast();
-        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _revokingHash);
+        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _changeGuardHash, tx.origin);
+    }
+
+    function getFunctionSelector(bytes memory data) internal pure returns (bytes memory) {
+        bytes memory selector = new bytes(4);
+        assembly {
+            let value := mload(add(data, 0x20))
+            mstore(add(selector, 0x20), value)
+        }
+        return selector;
     }
 }
