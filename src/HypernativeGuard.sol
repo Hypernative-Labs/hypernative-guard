@@ -19,6 +19,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
 
     error OnlySafe();
     error OnlyKeeper();
+    error OnlyKeeperOrSafe();
 
     error UnapprovedHash();
 
@@ -124,6 +125,14 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      */
     modifier onlyGuardedSafe() {
         require(msg.sender == safeAddress, OnlySafe());
+        _;
+    }
+
+    /**
+     * @dev Restricts function access to the keeper or the protected Safe contract
+     */
+    modifier onlyKeeperOrSafe() {
+        require(hasRole(KEEPER_ROLE, msg.sender) || msg.sender == safeAddress, OnlyKeeperOrSafe());
         _;
     }
 
@@ -312,7 +321,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @notice Removes a policy extension from the guard
      * @param _policyExtension Address of the policy extension to remove
      */
-    function removePolicyExtension(address _policyExtension) public onlyKeeper {
+    function removePolicyExtension(address _policyExtension) public onlyKeeperOrSafe {
         require(policyExtensions.remove(_policyExtension), PolicyExtensionNotFound());
         emit PolicyExtensionRemoved(_policyExtension);
     }
