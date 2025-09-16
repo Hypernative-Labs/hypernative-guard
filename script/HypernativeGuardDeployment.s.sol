@@ -14,18 +14,20 @@ contract HypernativeGuardDeploymentScript is Script {
     HypernativeGuard hypernativeGuard;
     HypernativeGuard hypernativeOldGuard;
     SigUtils sigUtils;
-    uint256 private _owner3PrivateKey;
     address private signer1;
     uint256[] private ownerPKs;
     mapping(address => address) private ownerAddresses;
-
+    address private keeper;
+    address private safeAddress;
     event logBytes32(bytes32);
     event logBytes(bytes);
 
     function setUp() public {
         string memory url = vm.rpcUrl("sepolia");
-        address safeAddress = vm.envAddress("SAFE_ADDRESS");
-        
+        // the Safe we want to protect using the HypernativeGuard
+        //safeAddress = 
+        // the keeper we want to use to approve the Safe transactions (usually SystemAsset)
+        // keeper = 
         vm.createSelectFork(url);
         safe = Safe(payable(safeAddress));
 
@@ -48,7 +50,7 @@ contract HypernativeGuardDeploymentScript is Script {
 
     function run() public {
         vm.startBroadcast();
-        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _changeGuardHash, tx.origin);
+        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _changeGuardHash, keeper);
     }
 
     function getFunctionSelector(bytes memory data) internal pure returns (bytes memory) {
