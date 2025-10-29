@@ -14,7 +14,7 @@ import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
  * @notice A transaction guard for the Safe smart contract wallet that enforces transaction approval policies
  * @dev Extends BaseTransactionGuard and implements AccessControl for role-based management
  */
-contract HypernativeGuard is BaseTransactionGuard, AccessControl {
+contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     error OnlySafe();
@@ -353,7 +353,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @dev Can only be called by the keeper
      */
     function enablePassThroughMode() public onlyKeeper {
-        isPassThroughMode = true;
+        
         emit PassThroughModeEnabled();
     }
 
@@ -505,10 +505,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(BaseTransactionGuard, AccessControl)
+        override(AccessControl, BaseTransactionGuard)
         returns (bool)
     {
-        return interfaceId == type(ITransactionGuard).interfaceId // Safe Guard interface
+        return super.supportsInterface(interfaceId)
             || AccessControl.supportsInterface(interfaceId);
     }
 }
