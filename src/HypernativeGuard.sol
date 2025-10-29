@@ -25,6 +25,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
 
     error TimelockNotTriggered();
     error TimelockNotCompleted();
+    error CannotRevokeTimelockHashes();
 
     error PolicyExtensionNotValid();
     error PolicyExtensionNotFound();
@@ -51,6 +52,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
 
     /// @notice Whether the timelock sequence has been triggered
     bool public isTimelockTriggered;
+
+    /// @notice Whether the guard is in pass-through mode
+    /// @dev If true, the guard will not enforce restriction on the transaction and will allow it to pass through
+    bool public isPassThroughMode;
 
     /// @notice Mapping of approved transaction hashes to their approval status
     mapping(bytes32 txHash => bool) public approvedTxHashes;
@@ -111,6 +116,16 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param policyExtension The address of the removed policy extension
      */
     event PolicyExtensionRemoved(address policyExtension);
+
+    /**
+     * @notice Emitted when the pass-through mode is enabled
+     */
+    event PassThroughModeEnabled();
+
+    /**
+     * @notice Emitted when the pass-through mode is disabled
+     */
+    event PassThroughModeDisabled();
 
     /**
      * @dev Restricts function access to accounts with the keeper role
@@ -204,6 +219,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         bytes memory signatures,
         address executor
     ) external view override onlyGuardedSafe {
+
+        if (isPassThroughMode) {
+            return;
+        }
         // process policy extensions
         for (uint256 i = 0; i < policyExtensions.length(); ++i) {
             IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
@@ -289,6 +308,9 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param nonceFreeTxHash The nonce-free hash to revoke approval for
      */
     function revokeNonceFreeHash(bytes32 nonceFreeTxHash) public onlyKeeper {
+        if (nonceFreeTxHash == activateTimelockHash || nonceFreeTxHash == disableTimelockHash) {
+            revert CannotRevokeTimelockHashes();
+        }
         approvedNonceFreeTxHashes[nonceFreeTxHash] = false;
         emit HashRevoked(nonceFreeTxHash, HashType.NonceFree);
     }
@@ -324,6 +346,24 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     function removePolicyExtension(address _policyExtension) public onlyKeeperOrSafe {
         require(policyExtensions.remove(_policyExtension), PolicyExtensionNotFound());
         emit PolicyExtensionRemoved(_policyExtension);
+    }
+
+    /**
+     * @notice Flips the pass-through mode
+     * @dev Can only be called by the keeper
+     */
+    function enablePassThroughMode() public onlyKeeper {
+        isPassThroughMode = true;
+        emit PassThroughModeEnabled();
+    }
+
+    /**
+     * @notice Disables the pass-through mode
+     * @dev Can only be called by the keeper
+     */
+    function disablePassThroughMode() public onlyKeeper {
+        isPassThroughMode = false;
+        emit PassThroughModeDisabled();
     }
 
     /**
