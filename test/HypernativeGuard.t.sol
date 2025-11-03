@@ -19,8 +19,11 @@ contract HypernativeGuardTest is Test {
     AddressZeroNotAllowedPolicy public addressZeroNotAllowedPolicy;
     bytes32 private _changeGuardHash;
 
+    address internal keeperAddress;
     address internal signer1;
     address internal signer2;
+
+    uint256 private _keeperPrivateKey;
     uint256 private _owner1PrivateKey;
     uint256 private _owner2PrivateKey;
     uint256 private _owner3PrivateKey;
@@ -43,8 +46,12 @@ contract HypernativeGuardTest is Test {
         signer1 = vm.addr(_owner3PrivateKey);
         //signer2 = vm.addr(_owner2PrivateKey);
         ownerAddresses[signer1] = signer1;
+        (keeperAddress, _keeperPrivateKey) = makeAddrAndKey("keeper");
+        //_keeperPrivateKey = 
         //ownerAddresses[signer2] = signer2;
         // the hash to revoke the guard
+        vm.deal(keeperAddress, 10 ether);
+        vm.startPrank(keeperAddress);
         bytes memory setGuardData = abi.encodeWithSelector(GuardManager.setGuard.selector);
         _changeGuardHash = keccak256(
             abi.encode(
@@ -59,11 +66,12 @@ contract HypernativeGuardTest is Test {
                 payable(0)
             )
         );
-        hypernativeGuard = new HypernativeGuard(payable(safe), _changeGuardHash, address(this));
+        hypernativeGuard = new HypernativeGuard(payable(safe), _changeGuardHash, keeperAddress);
         poolManager = new MockPoolManager(address(safe));
         addressZeroNotAllowedPolicy = new AddressZeroNotAllowedPolicy();
-        vm.startPrank(signer1);
+        //vm.startPrank(signer1);
         vm.deal(address(safe), 1 ether);
+        vm.startPrank(keeperAddress);
     }
 
     function test_SendFunds() public {
@@ -72,20 +80,33 @@ contract HypernativeGuardTest is Test {
     }
 
     function test_addHashNotKeeperReverts() public {
+        vm.stopPrank();
+        // now operating as address(this) which doesn't have the keeper role
         vm.expectRevert();
         hypernativeGuard.approveNonceFreeHash(0x0);
     }
 
     function test_WithdrawEth() public {
         uint256 balanceBefore = address(safe).balance;
-        withdrawEth();
+        withdrawEth(false);
         assertEq(balanceBefore - 0.005 ether, address(safe).balance);
     }
 
-    function withdrawEth() internal {
-        SigUtils.SafeTx memory safeTx = generateWithrawTxToSign();
+    function test_WithdrawEthOfflineSigner() public {
+        uint256 balanceBefore = address(safe).balance;
+        withdrawEth(true);
+        assertEq(balanceBefore - 0.005 ether, address(safe).balance);
+    }
+
+    function withdrawEth(bool isOfflineSigner) internal {
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
-        bytes memory signatures = signTransaction(digest);
+        bytes memory signatures;
+        if (isOfflineSigner) {
+            signatures = signTransactionWithKeeper(digest);
+        } else {
+            signatures = signTransaction(digest);
+        }
         safe.execTransaction(
             safeTx.to,
             safeTx.value,
@@ -101,7 +122,7 @@ contract HypernativeGuardTest is Test {
     }
 
     function withdrawEthReverts() internal {
-        SigUtils.SafeTx memory safeTx = generateWithrawTxToSign();
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
         vm.expectRevert();
@@ -142,12 +163,11 @@ contract HypernativeGuardTest is Test {
         withdrawEthReverts();
     }
 
-    function test_ConfigureHypernativeGuardAndExecuteWithrawTx() public {
+    function test_ConfigureHypernativeGuardAndExecuteWithdrawTx() public {
         testConfigureHypernativeGuard();
-        SigUtils.SafeTx memory safeTx = generateWithrawTxToSign();
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
-        vm.stopPrank();
         hypernativeGuard.approveHash(digest);
         vm.startPrank(signer1);
         safe.execTransaction(
@@ -166,19 +186,16 @@ contract HypernativeGuardTest is Test {
 
     function test_RevokeApprovedHashExpectRevert() public {
         testConfigureHypernativeGuard();
-        SigUtils.SafeTx memory safeTx = generateWithrawTxToSign();
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
-        vm.stopPrank();
         hypernativeGuard.approveHash(digest);
         hypernativeGuard.revokeHash(digest);
-        vm.startPrank(signer1);
         withdrawEthReverts();
     }
 
     function testRevokeHypernativeGuardRevertsOnTimelockInit() public {
         testConfigureHypernativeGuard();
         (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveRevokeGuardTx();
-        vm.startPrank(signer1);
         vm.expectRevert(HypernativeGuard.TimelockNotTriggered.selector);
         safe.execTransaction(
             safeTx.to,
@@ -247,7 +264,7 @@ contract HypernativeGuardTest is Test {
 
     function test_NonceFreeTx() public {
         testConfigureHypernativeGuard();
-        SigUtils.SafeTx memory safeTx = generateWithrawTxToSign();
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
         bytes32 nonceFreeHash = hypernativeGuard.getNonceFreeTransactionHash(
             safeTx.to,
             safeTx.value,
@@ -259,7 +276,6 @@ contract HypernativeGuardTest is Test {
             safeTx.gasToken,
             safeTx.refundReceiver
         );
-        vm.stopPrank();
         hypernativeGuard.approveNonceFreeHash(nonceFreeHash);
         vm.startPrank(signer1);
         // shouldn't revert because the nonceFreeHash is already approved
@@ -270,7 +286,7 @@ contract HypernativeGuardTest is Test {
 
     function test_ApproveAndRevokeNonceFree() public {
         testConfigureHypernativeGuard();
-        SigUtils.SafeTx memory safeTx = generateWithrawTxToSign();
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
         bytes32 nonceFreeHash = hypernativeGuard.getNonceFreeTransactionHash(
             safeTx.to,
             safeTx.value,
@@ -282,14 +298,14 @@ contract HypernativeGuardTest is Test {
             safeTx.gasToken,
             safeTx.refundReceiver
         );
-        vm.stopPrank();
+        
         hypernativeGuard.approveNonceFreeHash(nonceFreeHash);
-        vm.startPrank(signer1);
+        
         // shouldn't revert because the nonceFreeHash is already approved
         test_WithdrawEth();
-        vm.stopPrank();
+        
         hypernativeGuard.revokeNonceFreeHash(nonceFreeHash);
-        vm.startPrank(signer1);
+        
         // // should revert because the nonceFreeHash is revoked
         withdrawEthReverts();
     }
@@ -310,9 +326,8 @@ contract HypernativeGuardTest is Test {
             address(0),
             payable(0)
         );
-        vm.stopPrank();
+        
         hypernativeGuard.approveFunctionCallHash(functionCallTxHash);
-        vm.startPrank(signer1);
         SigUtils.SafeTx memory safeTx = generatePoolManagerPauseTx(address(1));
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
@@ -348,7 +363,6 @@ contract HypernativeGuardTest is Test {
         );
         assertTrue(poolManager.poolsStatus(address(2)));
 
-        vm.stopPrank();
         hypernativeGuard.revokeFunctionCallHash(functionCallTxHash);
         vm.startPrank(signer1);
         safeTx = generatePoolManagerPauseTx(address(3));
@@ -376,7 +390,7 @@ contract HypernativeGuardTest is Test {
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
 
-        vm.stopPrank();
+        
         hypernativeGuard.approveHash(digest); // approve the add keeper role hash
         // grant the keeper role to address(1)
         safe.execTransaction(
@@ -397,12 +411,13 @@ contract HypernativeGuardTest is Test {
         // should revert because hash wasn't approved yet
         withdrawEthReverts();
 
-        // approve the withdraw hash through the Safe Multisig
-        safeTx = generateWithrawTxToSign();
+        // sign the withdraw hash through the Safe Multisig
+        safeTx = generateWithdrawTxToSign();
         digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
 
         // aprove the hash through address(1) which has the keeper role
+        vm.stopPrank();
         vm.prank(address(1));
         hypernativeGuard.approveHash(digest);
         safe.execTransaction(
@@ -418,10 +433,11 @@ contract HypernativeGuardTest is Test {
             signatures
         );
 
+        // sign the revoke keeper role hash through the Safe Multisig
         safeTx = generateRevokeKeeperTxToSign();
         digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
-        vm.stopPrank();
+        vm.prank(keeperAddress);
         hypernativeGuard.approveHash(digest);
         // revoke the keeper role from address(1)
         safe.execTransaction(
@@ -460,9 +476,7 @@ contract HypernativeGuardTest is Test {
             safeTx.gasToken,
             safeTx.refundReceiver
         );
-        vm.stopPrank();
         hypernativeGuard.approveNonceFreeHash(addressZeroNonceFreeHash);
-        vm.startPrank(signer1);
         bytes memory signatures = signTransaction(digest);
         // Tx to address zero should work because the blocking Policy wasn't applied yet
         safe.execTransaction(
@@ -481,9 +495,7 @@ contract HypernativeGuardTest is Test {
         safeTx = generateAddPolicyTransactionToSign();
         digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
-        vm.stopPrank();
         hypernativeGuard.approveHash(digest);
-        vm.startPrank(signer1);
         // Add policy
 
         safe.execTransaction(
@@ -521,7 +533,6 @@ contract HypernativeGuardTest is Test {
         // grant the keeper role to the Safe address
         safeTx = generateGrantKeeperTxToSign(address(safe));
         digest = sigUtils.getTypedDataHash(safeTx);
-        vm.stopPrank();
         hypernativeGuard.approveHash(digest);
         signatures = signTransaction(digest);
         safe.execTransaction(
@@ -538,13 +549,11 @@ contract HypernativeGuardTest is Test {
         );
 
         // now we'll remove the policy and try again
-        vm.startPrank(signer1);
         safeTx = generateRemovePolicyTransactionToSign();
         digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
-        vm.stopPrank();
+
         hypernativeGuard.approveHash(digest);
-        vm.startPrank(signer1);
         // policy removed
         safe.execTransaction(
             safeTx.to,
@@ -584,9 +593,7 @@ contract HypernativeGuardTest is Test {
         SigUtils.SafeTx memory safeTx = generateGuardTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
-        vm.stopPrank();
-        //hypernativeGuard.hypernativeApproveHash(digest);
-        vm.startPrank(signer1);
+
         safe.execTransaction(
             safeTx.to,
             safeTx.value,
@@ -628,7 +635,6 @@ contract HypernativeGuardTest is Test {
         safeTx = generateRevokeGuardTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         signatures = signTransaction(digest);
-        vm.stopPrank();
         hypernativeGuard.approveHash(digest);
         return (safeTx, signatures);
     }
@@ -681,7 +687,7 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateWithrawTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateWithdrawTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(this),
             value: 0.005 ether,
@@ -833,6 +839,23 @@ contract HypernativeGuardTest is Test {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
             signatures = bytes.concat(signatures, abi.encodePacked(r, s, v));
         }
+        bytes32 contextLength;
+        bytes memory context;
+        bytes memory keeperSignature = new bytes(65);
+        signatures = bytes.concat(signatures, keeperSignature, context, contextLength);
+    }
+
+    function signTransactionWithKeeper(bytes32 digest) internal view returns (bytes memory signatures) {
+        for (uint256 i; i < ownerPKs.length; ++i) {
+            uint256 pk = ownerPKs[i];
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
+            signatures = bytes.concat(signatures, abi.encodePacked(r, s, v));
+        }
+        bytes32 contextLength;
+        bytes memory context;
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(_keeperPrivateKey, digest);
+        bytes memory keeperSignature = abi.encodePacked(r, s, v);
+        signatures = bytes.concat(signatures, keeperSignature, context, contextLength);
     }
 
     function getFunctionSelector(bytes memory data) internal pure returns (bytes memory) {
