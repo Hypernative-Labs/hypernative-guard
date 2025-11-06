@@ -2,18 +2,17 @@
 pragma solidity 0.8.28;
 
 import "forge-std/Test.sol";
-import {console} from "forge-std/Test.sol";
-import "../src/HypernativeGuard.sol";
-import {Safe} from "@safe/contracts/Safe.sol";
-import {Enum} from "@safe/contracts/libraries/Enum.sol";
-import {SigUtils} from "./SigUtils.sol";
 import {GuardManager} from "@safe/contracts/base/GuardManager.sol";
+import {ISafe} from "@safe/contracts/interfaces/ISafe.sol";
+import {Enum} from "@safe/contracts/libraries/Enum.sol";
+import {HypernativeGuard} from "../src/HypernativeGuard.sol";
+import {SigUtils} from "./SigUtils.sol";
 import {MockPoolManager} from "./Mocks/MockPoolManager.sol";
 import {AddressZeroNotAllowedPolicy} from "./Mocks/MockPolicies/AddressZeroNotAllowedPolicy.sol";
 
 contract HypernativeGuardTest is Test {
     HypernativeGuard public hypernativeGuard;
-    Safe public safe;
+    ISafe public safe;
     SigUtils sigUtils;
     MockPoolManager public poolManager;
     AddressZeroNotAllowedPolicy public addressZeroNotAllowedPolicy;
@@ -35,7 +34,7 @@ contract HypernativeGuardTest is Test {
     function setUp() public {
         string memory url = vm.rpcUrl("sepolia");
         vm.selectFork(vm.createFork(url));
-        safe = Safe(payable(0xCFe98FC6d837cccbaF6bCa703652a664a8a59604));
+        safe = ISafe(0xCFe98FC6d837cccbaF6bCa703652a664a8a59604);
         sigUtils = new SigUtils(safe.domainSeparator());
         // _owner1PrivateKey = vm.envUint("SIGNER1");
         // _owner2PrivateKey = vm.envUint("SIGNER2");
@@ -66,7 +65,7 @@ contract HypernativeGuardTest is Test {
                 payable(0)
             )
         );
-        hypernativeGuard = new HypernativeGuard(payable(safe), _changeGuardHash, keeperAddress);
+        hypernativeGuard = new HypernativeGuard(address(safe), _changeGuardHash, keeperAddress);
         poolManager = new MockPoolManager(address(safe));
         addressZeroNotAllowedPolicy = new AddressZeroNotAllowedPolicy();
         //vm.startPrank(signer1);
@@ -75,7 +74,7 @@ contract HypernativeGuardTest is Test {
     }
 
     function test_SendFunds() public {
-        (bool success,) = payable(safe).call{value: 0.1 ether}("");
+        (bool success,) = address(safe).call{value: 0.1 ether}("");
         require(success);
     }
 
