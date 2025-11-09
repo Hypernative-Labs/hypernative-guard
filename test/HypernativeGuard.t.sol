@@ -870,8 +870,9 @@ contract HypernativeGuardTest is Test {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
             signatures = bytes.concat(signatures, abi.encodePacked(r, s, v));
         }
-        bytes32 contextLength;
-        bytes memory context;
+        // encoding the keeper signature with some mock context data and context length
+        bytes32 contextLength = bytes32(uint256(4));
+        bytes memory context = abi.encodeWithSelector(HypernativeGuard.enablePassThroughMode.selector);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(_keeperPrivateKey, digest);
         bytes memory keeperSignature = abi.encodePacked(r, s, v);
         signatures = bytes.concat(signatures, keeperSignature, context, contextLength);
