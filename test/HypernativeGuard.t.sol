@@ -68,9 +68,9 @@ contract HypernativeGuardTest is Test {
         hypernativeGuard = new HypernativeGuard(address(safe), _changeGuardHash, keeperAddress);
         poolManager = new MockPoolManager(address(safe));
         addressZeroNotAllowedPolicy = new AddressZeroNotAllowedPolicy();
-        //vm.startPrank(signer1);
         vm.deal(address(safe), 1 ether);
         vm.startPrank(keeperAddress);
+        hypernativeGuard.disablePassThroughMode();
     }
 
     function test_SendFunds() public {
@@ -830,6 +830,26 @@ contract HypernativeGuardTest is Test {
             nonce: safe.nonce()
         });
         return safeTx;
+    }
+
+    function test_EnablePassThroughMode() public {
+        hypernativeGuard.enablePassThroughMode();
+        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        // submit a tx when pass-through mode is enabled, so no need to approve the hash on the Guard
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
     }
 
     function signTransaction(bytes32 digest) internal view returns (bytes memory signatures) {
