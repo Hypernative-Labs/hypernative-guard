@@ -345,7 +345,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     }
 
     /**
-     * @notice Approves a nonce-free transaction hash
+     * @notice Approves a nonce-free transaction hash - allowing the transaction to be executed regardless of the current safe nonce
      * @dev Sets the approval status to true for a nonce-free transaction hash
      * @param nonceFreeTxHash The nonce-free hash of the transaction to approve
      */
@@ -355,7 +355,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     }
 
     /**
-     * @notice Approves a function call hash
+     * @notice Approves a function call hash - allowing a call using 4byte selecor and target address to be executed
      * @dev Sets the approval status to true for a function call hash
      * @param functionCallTxHash The function call hash to approve
      */
