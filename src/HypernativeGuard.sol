@@ -433,7 +433,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @notice Disables the pass-through mode
      * @dev Can only be called by the keeper
      */
-    function disablePassThroughMode() public onlyKeeper {
+    function disablePassThroughMode() public onlyKeeperOrSafe {
         isPassThroughMode = false;
         emit PassThroughModeDisabled();
     }
