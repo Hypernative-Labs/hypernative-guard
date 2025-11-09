@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Enum, Safe} from "@safe/contracts/Safe.sol";
+import {Enum} from "../src/interfaces/ISafe.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract SigUtils is Test {

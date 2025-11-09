@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Safe} from "@safe/contracts/Safe.sol";
-import {Enum} from "@safe/contracts/libraries/Enum.sol";
-import {BaseTransactionGuard, ITransactionGuard, GuardManager} from "@safe/contracts/base/GuardManager.sol";
+import {ISafe, Enum} from "./interfaces/ISafe.sol";
+import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
+import {BaseTransactionGuard, ITransactionGuard} from "@safe/contracts/base/GuardManager.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title HypernativeGuard
@@ -14,7 +14,7 @@ import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
  * @notice A transaction guard for the Safe smart contract wallet that enforces transaction approval policies
  * @dev Extends BaseTransactionGuard and implements AccessControl for role-based management
  */
-contract HypernativeGuard is BaseTransactionGuard, AccessControl {
+contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     error OnlySafe();
@@ -25,14 +25,20 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
 
     error TimelockNotTriggered();
     error TimelockNotCompleted();
+    error CannotRevokeTimelockHashes();
 
     error PolicyExtensionNotValid();
     error PolicyExtensionNotFound();
     error PolicyExtensionAlreadyExists();
 
+    error InvalidKeeperSignature();
+
     /// @notice Address of the Safe wallet this guard is attached to
     /// @dev Immutable and set during contract deployment
-    address payable public immutable safeAddress;
+    address public immutable safeAddress;
+
+    /// @notice Safe contract instance
+    ISafe internal safe;
 
     /// @notice Role identifier for keeper accounts that can approve transactions
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
@@ -51,6 +57,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
 
     /// @notice Whether the timelock sequence has been triggered
     bool public isTimelockTriggered;
+
+    /// @notice Whether the guard is in pass-through mode
+    /// @dev If true, the guard will not enforce restriction on the transaction and will allow it to pass through
+    bool public isPassThroughMode;
 
     /// @notice Mapping of approved transaction hashes to their approval status
     mapping(bytes32 txHash => bool) public approvedTxHashes;
@@ -113,6 +123,16 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     event PolicyExtensionRemoved(address policyExtension);
 
     /**
+     * @notice Emitted when the pass-through mode is enabled
+     */
+    event PassThroughModeEnabled();
+
+    /**
+     * @notice Emitted when the pass-through mode is disabled
+     */
+    event PassThroughModeDisabled();
+
+    /**
      * @dev Restricts function access to accounts with the keeper role
      */
     modifier onlyKeeper() {
@@ -142,9 +162,11 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param _safeAddress The address of the Safe this guard will protect
      * @param _revokingHash The hash that identifies the HypernativeGuard revocation operations
      */
-    constructor(address payable _safeAddress, bytes32 _revokingHash, address _keeper) {
+    constructor(address _safeAddress, bytes32 _revokingHash, address _keeper) {
         _grantRole(KEEPER_ROLE, _keeper);
+        isPassThroughMode = true;
         safeAddress = _safeAddress;
+        safe = ISafe(safeAddress);
         revokingHash = _revokingHash;
         activateTimelockHash = keccak256(
             abi.encode(
@@ -199,21 +221,90 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
         uint256 baseGas,
         uint256 gasPrice,
         address gasToken,
-        // solhint-disable-next-line no-unused-vars
         address payable refundReceiver,
-        bytes memory signatures,
+        bytes calldata signatures,
         address executor
     ) external view override onlyGuardedSafe {
+        if (isPassThroughMode) {
+            return;
+        }
+
+        // context is being ignored for now, and reserved for potential future use
+        (bytes memory keeperSignature, ) = _extractSignatureComponents(signatures);
+
         // process policy extensions
         for (uint256 i = 0; i < policyExtensions.length(); ++i) {
             IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
                 to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures, executor
             );
-        }
-        Safe safe = Safe(safeAddress);
+        }       
+
         bytes32 txHash = safe.getTransactionHash(
             to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
         );
+
+        // skip ECDSA recovery for empty keeper signatures to save gas
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (bytes32(keeperSignature) == bytes32(0)) {
+            _validateTransactionApproval(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, txHash);
+        }
+        else {
+            _checkKeeperSignature(txHash, keeperSignature);
+        }
+    }
+
+    /**
+     * @dev Checks if the keeper signature is valid
+     * @param txHash The hash of the transaction
+     * @param keeperSignature The keeper signature
+     */
+    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view {
+        (address signer, ECDSA.RecoverError err, ) = ECDSA.tryRecover(txHash, keeperSignature);
+        require(hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError, InvalidKeeperSignature());
+    }
+
+    /**
+     * @dev Extracts keeper signature and context from signatures bytes
+     * @dev that assumes the following format of the signatures field: [signatures][keeperSignature: 65 bytes][context: contextLength bytes][contextLength: bytes32]
+     * @param signatures The full signatures bytes with appended keeper signature and context
+     * @return keeperSignature The 65-byte keeper signature
+     * @return context The context bytes
+     */
+    function _extractSignatureComponents(bytes calldata signatures)
+        internal
+        pure
+        returns (bytes memory keeperSignature, bytes memory context)
+    {
+        uint256 contextLength = uint256(bytes32(signatures[signatures.length - 32:]));
+        keeperSignature = signatures[signatures.length - 32 - contextLength - 65 : signatures.length - 32 - contextLength];
+        context = signatures[signatures.length - 32 - contextLength : signatures.length - 32];
+    }
+
+    /**
+     * @dev Validates transaction approval via hash checks or timelock
+     * @param to Destination address
+     * @param value Ether value
+     * @param data Transaction data
+     * @param operation Operation type
+     * @param safeTxGas Safe transaction gas
+     * @param baseGas Base gas
+     * @param gasPrice Gas price
+     * @param gasToken Gas token address
+     * @param refundReceiver Refund receiver address
+     * @param txHash The regular transaction hash
+     */
+    function _validateTransactionApproval(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address refundReceiver,
+        bytes32 txHash
+    ) internal view {
         bytes32 nonceFreeTxHash = getNonceFreeTransactionHash(
             to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver
         );
@@ -236,7 +327,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
             revert UnapprovedHash();
         }
     }
-
+    
     /**
      * @notice Required by the ITransactionGuard interface, called after transaction execution
      * @dev This function is a no-op in the current implementation
@@ -254,7 +345,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     }
 
     /**
-     * @notice Approves a nonce-free transaction hash
+     * @notice Approves a nonce-free transaction hash - allowing the transaction to be executed regardless of the current safe nonce
      * @dev Sets the approval status to true for a nonce-free transaction hash
      * @param nonceFreeTxHash The nonce-free hash of the transaction to approve
      */
@@ -264,7 +355,7 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     }
 
     /**
-     * @notice Approves a function call hash
+     * @notice Approves a function call hash - allowing a call using 4byte selecor and target address to be executed
      * @dev Sets the approval status to true for a function call hash
      * @param functionCallTxHash The function call hash to approve
      */
@@ -289,6 +380,9 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
      * @param nonceFreeTxHash The nonce-free hash to revoke approval for
      */
     function revokeNonceFreeHash(bytes32 nonceFreeTxHash) public onlyKeeper {
+        if (nonceFreeTxHash == activateTimelockHash || nonceFreeTxHash == disableTimelockHash) {
+            revert CannotRevokeTimelockHashes();
+        }
         approvedNonceFreeTxHashes[nonceFreeTxHash] = false;
         emit HashRevoked(nonceFreeTxHash, HashType.NonceFree);
     }
@@ -324,6 +418,24 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     function removePolicyExtension(address _policyExtension) public onlyKeeperOrSafe {
         require(policyExtensions.remove(_policyExtension), PolicyExtensionNotFound());
         emit PolicyExtensionRemoved(_policyExtension);
+    }
+
+    /**
+     * @notice Flips the pass-through mode
+     * @dev Can only be called by the keeper
+     */
+    function enablePassThroughMode() public onlyKeeper {
+        isPassThroughMode = true;
+        emit PassThroughModeEnabled();
+    }
+
+    /**
+     * @notice Disables the pass-through mode
+     * @dev Can only be called by the keeper
+     */
+    function disablePassThroughMode() public onlyKeeperOrSafe {
+        isPassThroughMode = false;
+        emit PassThroughModeDisabled();
     }
 
     /**
@@ -465,10 +577,10 @@ contract HypernativeGuard is BaseTransactionGuard, AccessControl {
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(BaseTransactionGuard, AccessControl)
+        override(AccessControl, BaseTransactionGuard)
         returns (bool)
     {
-        return interfaceId == type(ITransactionGuard).interfaceId // Safe Guard interface
+        return super.supportsInterface(interfaceId)
             || AccessControl.supportsInterface(interfaceId);
     }
 }
