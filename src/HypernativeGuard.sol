@@ -273,11 +273,19 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     function _extractSignatureComponents(bytes calldata signatures)
         internal
         pure
-        returns (bytes memory keeperSignature, bytes memory context)
-    {
+        returns (bytes memory keeperSignature, bytes memory context) {
+        // Read context length from the last 32 bytes
         uint256 contextLength = uint256(bytes32(signatures[signatures.length - 32:]));
-        keeperSignature = signatures[signatures.length - 32 - contextLength - 65 : signatures.length - 32 - contextLength];
-        context = signatures[signatures.length - 32 - contextLength : signatures.length - 32];
+        
+        // Calculate where the context starts (and keeper signature ends)
+        uint256 contextStartIndex = signatures.length - 32 - contextLength;
+        
+        // Extract 65-byte keeper signature (immediately before context)
+        uint256 keeperSignatureStartIndex = contextStartIndex - 65;
+        keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
+        
+        // Extract context bytes
+        context = signatures[contextStartIndex : signatures.length - 32];
     }
 
     /**
