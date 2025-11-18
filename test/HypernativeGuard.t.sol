@@ -34,7 +34,7 @@ contract HypernativeGuardTest is Test {
     function setUp() public {
         string memory url = vm.rpcUrl("sepolia");
         vm.selectFork(vm.createFork(url));
-        safe = ISafe(0xCFe98FC6d837cccbaF6bCa703652a664a8a59604);
+        safe = ISafe(payable(0xCFe98FC6d837cccbaF6bCa703652a664a8a59604));
         sigUtils = new SigUtils(safe.domainSeparator());
         // _owner1PrivateKey = vm.envUint("SIGNER1");
         // _owner2PrivateKey = vm.envUint("SIGNER2");
