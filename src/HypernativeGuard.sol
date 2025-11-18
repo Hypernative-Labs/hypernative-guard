@@ -161,6 +161,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @dev Sets up initial configurations, approves timelock transactions, and assigns the deployer as keeper
      * @param _safeAddress The address of the Safe this guard will protect
      * @param _revokingHash The hash that identifies the HypernativeGuard revocation operations
+     * @param _keeper The address of the keeper that will be granted the keeper role
      */
     constructor(address _safeAddress, bytes32 _revokingHash, address _keeper) {
         _grantRole(KEEPER_ROLE, _keeper);
