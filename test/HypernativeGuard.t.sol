@@ -17,10 +17,12 @@ contract HypernativeGuardTest is Test {
     MockPoolManager public poolManager;
     AddressZeroNotAllowedPolicy public addressZeroNotAllowedPolicy;
     bytes32 private _changeGuardHash;
+    bytes32 private constant OWNERS_SENTINEL_SLOT = 0xe90b7bceb6e7df5418fb78d8ee546e97c83a08bbccc01a0644d599ccd2a7c2e0;
 
     address internal keeperAddress;
     address internal signer1;
     address internal signer2;
+    Vm.Wallet internal newWallet;
 
     uint256 private _keeperPrivateKey;
     uint256 private _owner1PrivateKey;
@@ -39,15 +41,30 @@ contract HypernativeGuardTest is Test {
         // _owner1PrivateKey = vm.envUint("SIGNER1");
         // _owner2PrivateKey = vm.envUint("SIGNER2");
         _owner3PrivateKey = vm.envUint("SIGNER3");
+        newWallet = vm.createWallet("MOCK_SIGNER");
+        signer1 = newWallet.addr;
+        
+        
 
-        ownerPKs.push(_owner3PrivateKey);
-        //ownerPKs.push(_owner2PrivateKey);
-        signer1 = vm.addr(_owner3PrivateKey);
-        //signer2 = vm.addr(_owner2PrivateKey);
-        ownerAddresses[signer1] = signer1;
+        
+        vm.store(address(safe), OWNERS_SENTINEL_SLOT, bytes32(uint256(uint160(signer1))));
+        bytes32 newOwnerSlot = keccak256(abi.encode(signer1, 2)); // 2 is the owners sslot
+        // new owner in the owners mapping need to point to SENTINEL (0x1) which is the sentinel owner
+        vm.store(address(safe), newOwnerSlot, bytes32(uint256(uint160(address(0x1)))));
+
+        
+
+
+        
+        //ownerPKs.push(_owner3PrivateKey);
+        //signer1 = vm.addr(_owner3PrivateKey);
+    
+        
+        ownerPKs.push(newWallet.privateKey);
+        
         (keeperAddress, _keeperPrivateKey) = makeAddrAndKey("keeper");
-        //_keeperPrivateKey = 
-        //ownerAddresses[signer2] = signer2;
+        
+        
         // the hash to revoke the guard
         vm.deal(keeperAddress, 10 ether);
         vm.startPrank(keeperAddress);
