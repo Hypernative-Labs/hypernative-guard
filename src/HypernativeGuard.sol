@@ -246,11 +246,10 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
 
         // skip ECDSA recovery for empty keeper signatures to save gas
         // forge-lint: disable-next-line(unsafe-typecast)
-        if (bytes32(keeperSignature) == bytes32(0)) {
+        bool isValidKeeperSignature = _checkKeeperSignature(txHash, keeperSignature);
+        if (!isValidKeeperSignature) {
             _validateTransactionApproval(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, txHash);
-        }
-        else {
-            _checkKeeperSignature(txHash, keeperSignature);
+
         }
     }
 
@@ -259,9 +258,13 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @param txHash The hash of the transaction
      * @param keeperSignature The keeper signature
      */
-    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view {
+    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view returns (bool isValidKeeperSignature) {
+        // Skip ECDSA recovery for empty keeper signatures to save gas
+        if (bytes32(keeperSignature) == bytes32(0)) {
+            return false;
+        }
         (address signer, ECDSA.RecoverError err, ) = ECDSA.tryRecover(txHash, keeperSignature);
-        require(hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError, InvalidKeeperSignature());
+        isValidKeeperSignature = hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError;
     }
 
     /**
@@ -275,17 +278,26 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
         internal
         pure
         returns (bytes memory keeperSignature, bytes memory context) {
+        
+        // Minimum length: 65 bytes (keeper sig) + 32 bytes (context length) = 97 bytes
+        if (signatures.length < 97) {
+            return (new bytes(0), new bytes(0));
+        }
+        
         // Read context length from the last 32 bytes
         uint256 contextLength = uint256(bytes32(signatures[signatures.length - 32:]));
         
-        // Calculate where the context starts (and keeper signature ends)
+        // Validate: total length must be at least 65 (keeper) + contextLength + 32 (length field)
+        // Which means: contextLength must be <= signatures.length - 97
+        if (contextLength > signatures.length - 97) {
+            return (new bytes(0), new bytes(0));
+        }
+        
+        // Now safe to calculate indices
         uint256 contextStartIndex = signatures.length - 32 - contextLength;
-        
-        // Extract 65-byte keeper signature (immediately before context)
         uint256 keeperSignatureStartIndex = contextStartIndex - 65;
-        keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
         
-        // Extract context bytes
+        keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
         context = signatures[contextStartIndex : signatures.length - 32];
     }
 
