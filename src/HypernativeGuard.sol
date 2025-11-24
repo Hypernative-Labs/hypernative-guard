@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {ISafe, Enum} from "./interfaces/ISafe.sol";
 import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
 import {BaseTransactionGuard, ITransactionGuard} from "@safe/contracts/base/GuardManager.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -14,7 +14,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  * @notice A transaction guard for the Safe smart contract wallet that enforces transaction approval policies
  * @dev Extends BaseTransactionGuard and implements AccessControl for role-based management
  */
-contract HypernativeGuard is AccessControl, BaseTransactionGuard {
+contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     error OnlySafe();
@@ -32,6 +32,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     error PolicyExtensionAlreadyExists();
 
     error InvalidKeeperSignature();
+    error AtLeastOneKeeperRequired();
 
     /// @notice Address of the Safe wallet this guard is attached to
     /// @dev Immutable and set during contract deployment
@@ -494,6 +495,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @param _keeper Address to revoke the keeper role from
      */
     function revokeKeeperRole(address _keeper) public onlyGuardedSafe {
+        require(getRoleMemberCount(KEEPER_ROLE) > 0, AtLeastOneKeeperRequired());
         _revokeRole(KEEPER_ROLE, _keeper);
     }
 
@@ -598,10 +600,10 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(AccessControl, BaseTransactionGuard)
+        override(AccessControlEnumerable, BaseTransactionGuard)
         returns (bool)
     {
         return super.supportsInterface(interfaceId)
-            || AccessControl.supportsInterface(interfaceId);
+            || AccessControlEnumerable.supportsInterface(interfaceId);
     }
 }
