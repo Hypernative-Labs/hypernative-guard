@@ -53,11 +53,20 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     /// @notice Hash for the timelock deactivation transaction
     bytes32 public immutable disableTimelockHash;
 
+    /// @notice Hash for enabling pass-through mode (requires timelock)
+    bytes32 public immutable enablePassThroughModeHash;
+
     /// @dev Timestamp when the timelock expires
     uint256 internal timelockBlock;
 
     /// @notice Whether the timelock sequence has been triggered
     bool public isTimelockTriggered;
+
+    /// @dev Timestamp when the pass-through timelock expires
+    uint256 internal passThroughTimelockBlock;
+
+    /// @notice Whether the pass-through timelock sequence has been triggered
+    bool public isPassThroughTimelockTriggered;
 
     /// @notice Whether the guard is in pass-through mode
     /// @dev If true, the guard will not enforce restriction on the transaction and will allow it to pass through
@@ -96,6 +105,18 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      * @param timestamp The timestamp when the timelock was disabled
      */
     event TimelockDisabled(uint256 timestamp);
+
+    /**
+     * @notice Emitted when the pass-through timelock is activated
+     * @param timestamp The timestamp when the pass-through timelock was activated
+     */
+    event PassThroughTimelockActivated(uint256 timestamp);
+
+    /**
+     * @notice Emitted when the pass-through timelock is disabled
+     * @param timestamp The timestamp when the pass-through timelock was disabled
+     */
+    event PassThroughTimelockDisabled(uint256 timestamp);
 
     /**
      * @notice Emitted when a hash is approved
@@ -196,6 +217,20 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
                 payable(0)
             )
         );
+        enablePassThroughModeHash = keccak256(
+            abi.encode(
+                address(this),
+                0,
+                keccak256(abi.encodeWithSelector(this.enablePassThroughMode.selector)),
+                Enum.Operation.Call,
+                0,
+                0,
+                0,
+                address(0),
+                payable(0)
+            )
+        );
+
         // pre-approve timelock transaction hashes as nonce-free
         approvedNonceFreeTxHashes[activateTimelockHash] = true;
         approvedNonceFreeTxHashes[disableTimelockHash] = true;
@@ -303,6 +338,16 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     }
 
     /**
+     * @dev Checks if a timelock is properly triggered and expired
+     * @param timelockExpiry The timestamp when the timelock expires
+     * @param timelockTriggered Whether the timelock has been triggered
+     */
+    function _checkTimelock(uint256 timelockExpiry, bool timelockTriggered) internal view {
+        require(timelockExpiry > 0 && timelockTriggered, TimelockNotTriggered());
+        require(block.timestamp > timelockExpiry, TimelockNotCompleted());
+    }
+
+    /**
      * @dev Validates transaction approval via hash checks or timelock
      * @param to Destination address
      * @param value Ether value
@@ -333,13 +378,16 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         bytes32 functionCallTxHash =
             getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
 
-        // if the transaction is a Guard change or revoke operation, check timelock status
-        // the revokingHash was set during contract deployment and is used to identify these operations
+        // Check timelock-protected operations
         if (functionCallTxHash == revokingHash) {
-            require(timelockBlock > 0 && isTimelockTriggered, TimelockNotTriggered());
-            require(block.timestamp > timelockBlock, TimelockNotCompleted());
+            _checkTimelock(timelockBlock, isTimelockTriggered);
             return;
-        } else if (
+        }
+        else if (nonceFreeTxHash == enablePassThroughModeHash) {
+            _checkTimelock(passThroughTimelockBlock, isPassThroughTimelockTriggered);
+            return;
+        }
+        else if (
             approvedTxHashes[txHash] || approvedNonceFreeTxHashes[nonceFreeTxHash]
                 || approvedFunctionCallHashes[functionCallTxHash]
         ) {
@@ -443,15 +491,6 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     }
 
     /**
-     * @notice Flips the pass-through mode
-     * @dev Can only be called by the keeper
-     */
-    function enablePassThroughMode() public onlyKeeper {
-        isPassThroughMode = true;
-        emit PassThroughModeEnabled();
-    }
-
-    /**
      * @notice Disables the pass-through mode
      * @dev Can only be called by the keeper
      */
@@ -459,6 +498,36 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         isPassThroughMode = false;
         emit PassThroughModeDisabled();
     }
+
+    /**
+     * @notice Enables the pass-through mode
+     * @dev Can only be called by the keeper
+     */
+    function enablePassThroughMode() public onlyGuardedSafe {
+        isPassThroughMode = true;
+        emit PassThroughModeEnabled();
+    }
+
+    /**
+     * @notice Activates the pass-through timelock sequence
+     * @dev Sets the pass-through timelock expiration time to 1 day from the current block timestamp
+     */
+    function activatePassThroughTimelock() public onlyGuardedSafe {
+        isPassThroughTimelockTriggered = true;
+        passThroughTimelockBlock = block.timestamp + 1 days;
+        emit PassThroughTimelockActivated(block.timestamp);
+    }
+
+    /**
+     * @notice Disables the pass-through timelock sequence
+     * @dev Can only be called by the Safe contract
+     */
+    function disablePassThroughTimelock() public onlyGuardedSafe {
+        isPassThroughTimelockTriggered = false;
+        passThroughTimelockBlock = 0;
+        emit PassThroughTimelockDisabled(block.timestamp);
+    }
+
 
     /**
      * @notice Activates the timelock sequence
@@ -505,7 +574,16 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      * @return The timestamp of the timelock expiration, or 0 if inactive
      */
     function getTimelockBlock() public view returns (uint256) {
-        return isTimelockTriggered ? timelockBlock : 0;
+        return timelockBlock;
+    }
+
+    /**
+     * @notice Returns the timestamp when the pass-through timelock expires
+     * @dev Returns 0 if the pass-through timelock is not currently triggered
+     * @return The timestamp of the pass-through timelock expiration, or 0 if inactive
+     */
+    function getPassThroughTimelockBlock() public view returns (uint256) {
+        return passThroughTimelockBlock;
     }
 
     /**

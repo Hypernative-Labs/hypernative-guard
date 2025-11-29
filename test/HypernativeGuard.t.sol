@@ -50,15 +50,7 @@ contract HypernativeGuardTest is Test {
         vm.store(address(safe), OWNERS_SENTINEL_SLOT, bytes32(uint256(uint160(signer1))));
         bytes32 newOwnerSlot = keccak256(abi.encode(signer1, 2)); // 2 is the owners sslot
         // new owner in the owners mapping need to point to SENTINEL (0x1) which is the sentinel owner
-        vm.store(address(safe), newOwnerSlot, bytes32(uint256(uint160(address(0x1)))));
-
-        
-
-
-        
-        //ownerPKs.push(_owner3PrivateKey);
-        //signer1 = vm.addr(_owner3PrivateKey);
-    
+        vm.store(address(safe), newOwnerSlot, bytes32(uint256(uint160(address(0x1)))));   
         
         ownerPKs.push(newWallet.privateKey);
         
@@ -644,6 +636,14 @@ contract HypernativeGuardTest is Test {
         );
     }
 
+    function generateAndApproveEnablePassthroughTimelockTx() internal returns (SigUtils.SafeTx memory safeTx, bytes memory signatures) {
+        safeTx = generateActivatePassThroughTimelockTxToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        return (safeTx, signatures);
+    }
+
     function generateAndApproveRevokeGuardTx()
         internal
         returns (SigUtils.SafeTx memory safeTx, bytes memory signatures)
@@ -849,12 +849,43 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function test_EnablePassThroughMode() public {
-        hypernativeGuard.enablePassThroughMode();
-        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
+    function generateActivatePassThroughTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.activatePassThroughTimelock.selector),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    function generateEnablePassThroughTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.enablePassThroughMode.selector),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    function enablePassthroughTimelock() internal {
+        SigUtils.SafeTx memory safeTx = generateActivatePassThroughTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
-        // submit a tx when pass-through mode is enabled, so no need to approve the hash on the Guard
+
         safe.execTransaction(
             safeTx.to,
             safeTx.value,
@@ -867,6 +898,27 @@ contract HypernativeGuardTest is Test {
             safeTx.refundReceiver,
             signatures
         );
+    }
+
+    function test_EnablePassThroughMode() public {
+        
+        enablePassthroughTimelock();
+        vm.warp(block.timestamp + 2 days);
+        (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveEnablePassthroughTimelockTx();
+        
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+        test_WithdrawEth();
     }
 
     function signTransaction(bytes32 digest) internal view returns (bytes memory signatures) {
