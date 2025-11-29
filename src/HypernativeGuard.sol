@@ -320,26 +320,27 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         pure
         returns (bytes memory keeperSignature, bytes memory context) {
         
-        // Minimum length: 65 bytes (keeper sig) + 32 bytes (context length) = 97 bytes
-        if (signatures.length < 97) {
+        uint256 signaturesLength = signatures.length;
+        // Minimum length: 65 bytes (keeper sig) + 32 bytes (context length) = 97 bytes  
+        if (signaturesLength < 97) {
             return (new bytes(0), new bytes(0));
         }
         
         // Read context length from the last 32 bytes
-        uint256 contextLength = uint256(bytes32(signatures[signatures.length - 32:]));
+        uint256 contextLength = uint256(bytes32(signatures[signaturesLength - 32:]));
         
         // Validate: total length must be at least 65 (keeper) + contextLength + 32 (length field)
         // Which means: contextLength must be <= signatures.length - 97
-        if (contextLength > signatures.length - 97) {
+        if (contextLength > signaturesLength - 97) {
             return (new bytes(0), new bytes(0));
         }
         
         // Now safe to calculate indices
-        uint256 contextStartIndex = signatures.length - 32 - contextLength;
+        uint256 contextStartIndex = signaturesLength - 32 - contextLength;
         uint256 keeperSignatureStartIndex = contextStartIndex - 65;
         
         keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
-        context = signatures[contextStartIndex : signatures.length - 32];
+        context = signatures[contextStartIndex : signaturesLength - 32];
     }
 
     /**
