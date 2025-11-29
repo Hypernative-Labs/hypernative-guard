@@ -21,6 +21,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     error OnlyKeeper();
     error OnlyKeeperOrSafe();
 
+    error InvalidKeeperSignature();
     error UnapprovedHash();
 
     error TimelockNotTriggered();
@@ -31,7 +32,8 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     error PolicyExtensionNotFound();
     error PolicyExtensionAlreadyExists();
 
-    error InvalidKeeperSignature();
+    error ZeroAddress();
+    error KeeperNotFound();
     error AtLeastOneKeeperRequired();
 
     /// @notice Address of the Safe wallet this guard is attached to
@@ -198,6 +200,8 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     constructor(address _safeAddress, bytes32 _revokingHash, address _keeper) {
         _grantRole(KEEPER_ROLE, _keeper);
         isPassThroughMode = true;
+        require(_safeAddress != address(0), ZeroAddress());
+        require(_keeper != address(0), ZeroAddress());
         safeAddress = _safeAddress;
         safe = ISafe(safeAddress);
         revokingHash = _revokingHash;
@@ -568,6 +572,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      * @param _keeper Address to grant the keeper role to
      */
     function grantKeeperRole(address _keeper) public onlyGuardedSafe {
+        require(_keeper != address(0), ZeroAddress());
         _grantRole(KEEPER_ROLE, _keeper);
     }
 
@@ -577,6 +582,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      * @param _keeper Address to revoke the keeper role from
      */
     function revokeKeeperRole(address _keeper) public onlyGuardedSafe {
+        require(hasRole(KEEPER_ROLE, _keeper), KeeperNotFound());
         require(getRoleMemberCount(KEEPER_ROLE) > 0, AtLeastOneKeeperRequired());
         _revokeRole(KEEPER_ROLE, _keeper);
     }
