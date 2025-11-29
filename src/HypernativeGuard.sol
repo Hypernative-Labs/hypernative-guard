@@ -44,6 +44,16 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     /// @notice Role identifier for keeper accounts that can approve transactions
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
 
+    /**
+     * @dev The precomputed EIP-712 type hash for the Safe transaction type.
+     *      Precomputed value of: `keccak256("SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)")`.
+     */
+    bytes32 private constant SAFE_TX_TYPEHASH = 0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8;
+
+    /// @notice Cached domain separator for the Safe instance
+    /// @dev Computed once during construction to save gas on subsequent calls
+    bytes32 public immutable DOMAIN_SEPARATOR;
+
     /// @notice Hash used for revoking operations
     bytes32 public immutable revokingHash;
 
@@ -191,6 +201,8 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         safeAddress = _safeAddress;
         safe = ISafe(safeAddress);
         revokingHash = _revokingHash;
+        DOMAIN_SEPARATOR = safe.domainSeparator();
+        
         activateTimelockHash = keccak256(
             abi.encode(
                 address(this),
@@ -362,7 +374,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         bytes memory keeperSignature
     ) internal view {
 
-        bytes32 txHash = safe.getTransactionHash(
+        bytes32 txHash = getTransactionHash(
             to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
         );
 
@@ -668,6 +680,51 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
                 refundReceiver
             )
         );
+    }
+
+    /**
+     * @notice Computes the Safe transaction hash locally without an external call
+     * @dev Uses EIP-712 structured hashing, matching Safe's getTransactionHash implementation
+     * @param to Destination address
+     * @param value Ether value
+     * @param data Transaction data payload
+     * @param operation Operation type
+     * @param safeTxGas Gas that should be used for the safe transaction
+     * @param baseGas Gas costs for data used to trigger the safe transaction
+     * @param gasPrice Maximum gas price that should be used for this transaction
+     * @param gasToken Token address (or 0 if ETH) that is used for the payment
+     * @param refundReceiver Address of receiver of gas payment (or 0 if tx.origin)
+     * @param _nonce Transaction nonce
+     * @return Transaction hash computed using EIP-712
+     */
+    function getTransactionHash(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address refundReceiver,
+        uint256 _nonce
+    ) internal view returns (bytes32) {
+        bytes32 safeTxHash = keccak256(
+            abi.encode(
+                SAFE_TX_TYPEHASH,
+                to,
+                value,
+                keccak256(data),
+                operation,
+                safeTxGas,
+                baseGas,
+                gasPrice,
+                gasToken,
+                refundReceiver,
+                _nonce
+            )
+        );
+        return keccak256(abi.encodePacked(bytes1(0x19), bytes1(0x01), DOMAIN_SEPARATOR, safeTxHash));
     }
 
     /**

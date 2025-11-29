@@ -116,6 +116,13 @@ interface ISafe {
      */
     function getStorageAt(bytes32 slot, uint256 index) external view returns (bytes32);
 
+
+    /**
+     * @notice Returns the domain separator for this contract, as defined in the EIP-712 standard.
+     * @return The domain separator hash.
+     */
+    function domainSeparator() external view returns (bytes32);
+
     /**
      * @notice Returns transaction hash to be signed by owners.
      * @param to Destination address.
