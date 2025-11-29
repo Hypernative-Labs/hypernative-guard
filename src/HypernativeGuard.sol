@@ -274,19 +274,8 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
             IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
                 to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures, executor
             );
-        }       
-
-        bytes32 txHash = safe.getTransactionHash(
-            to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
-        );
-
-        // skip ECDSA recovery for empty keeper signatures to save gas
-        // forge-lint: disable-next-line(unsafe-typecast)
-        bool isValidKeeperSignature = _checkKeeperSignature(txHash, keeperSignature);
-        if (!isValidKeeperSignature) {
-            _validateTransactionApproval(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, txHash);
-
-        }
+        }   
+        _validateTransactionApproval(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, keeperSignature);
     }
 
     /**
@@ -358,7 +347,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      * @param gasPrice Gas price
      * @param gasToken Gas token address
      * @param refundReceiver Refund receiver address
-     * @param txHash The regular transaction hash
+     * @param keeperSignature The keeper signature
      */
     function _validateTransactionApproval(
         address to,
@@ -370,13 +359,22 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         uint256 gasPrice,
         address gasToken,
         address refundReceiver,
-        bytes32 txHash
+        bytes memory keeperSignature
     ) internal view {
+
+        bytes32 txHash = safe.getTransactionHash(
+            to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
+        );
+
         bytes32 nonceFreeTxHash = getNonceFreeTransactionHash(
             to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver
         );
         bytes32 functionCallTxHash =
             getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
+        
+        // skip ECDSA recovery for empty keeper signatures to save gas
+        // forge-lint: disable-next-line(unsafe-typecast)
+        bool isValidKeeperSignature = _checkKeeperSignature(txHash, keeperSignature);
 
         // Check timelock-protected operations
         if (functionCallTxHash == revokingHash) {
@@ -385,6 +383,9 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         }
         else if (nonceFreeTxHash == enablePassThroughModeHash) {
             _checkTimelock(passThroughTimelockBlock, isPassThroughTimelockTriggered);
+            return;
+        }
+        else if (isValidKeeperSignature) {
             return;
         }
         else if (
