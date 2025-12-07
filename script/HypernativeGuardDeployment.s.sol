@@ -53,7 +53,7 @@ contract HypernativeGuardDeploymentScript is Script {
 
     function run() public {
         vm.startBroadcast();
-        hypernativeGuard = new HypernativeGuard(payable(address(safe)), _changeGuardHash, keeper);
+        hypernativeGuard = new HypernativeGuard(payable(address(safe)), keeper);
     }
 
     function getFunctionSelector(bytes memory data) internal pure returns (bytes memory) {

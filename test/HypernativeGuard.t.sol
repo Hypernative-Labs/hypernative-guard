@@ -57,7 +57,7 @@ contract HypernativeGuardTest is Test {
         (keeperAddress, _keeperPrivateKey) = makeAddrAndKey("keeper");
         
         
-        // the hash to revoke the guard
+        // the hash to revoke the guard (using privileged operation hash format)
         vm.deal(keeperAddress, 10 ether);
         vm.startPrank(keeperAddress);
         bytes memory setGuardData = abi.encodeWithSelector(GuardManager.setGuard.selector);
@@ -65,7 +65,7 @@ contract HypernativeGuardTest is Test {
             abi.encode(
                 address(safe),
                 0,
-                keccak256((getFunctionSelector(setGuardData))),
+                keccak256((setGuardData)),
                 Enum.Operation.Call,
                 0,
                 0,
@@ -74,7 +74,8 @@ contract HypernativeGuardTest is Test {
                 payable(0)
             )
         );
-        hypernativeGuard = new HypernativeGuard(address(safe), _changeGuardHash, keeperAddress);
+
+        hypernativeGuard = new HypernativeGuard(address(safe), keeperAddress);
         poolManager = new MockPoolManager(address(safe));
         addressZeroNotAllowedPolicy = new AddressZeroNotAllowedPolicy();
         vm.deal(address(safe), 1 ether);
@@ -245,7 +246,7 @@ contract HypernativeGuardTest is Test {
         // activate timelock
         activateTimelock();
         vm.warp(block.timestamp + 5 hours);
-        disableTimelock();
+        disableRevokeTimelock();
         vm.warp(block.timestamp + 2 days);
         withdrawEthReverts();
     }
@@ -598,7 +599,7 @@ contract HypernativeGuardTest is Test {
     }
 
     function activateTimelock() internal {
-        SigUtils.SafeTx memory safeTx = generateGuardTimelockTxToSign();
+        SigUtils.SafeTx memory safeTx = generateGuardRevokeTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
 
@@ -616,8 +617,8 @@ contract HypernativeGuardTest is Test {
         );
     }
 
-    function disableTimelock() internal {
-        SigUtils.SafeTx memory safeTx = generateGuardDisableTimelockTxToSign();
+    function disableRevokeTimelock() internal {
+        SigUtils.SafeTx memory safeTx = generateGuardDisableRevokeTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
         vm.stopPrank();
@@ -687,11 +688,11 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateGuardTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateGuardRevokeTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(hypernativeGuard),
             value: 0,
-            data: abi.encodeWithSelector(HypernativeGuard.activateTimelock.selector),
+            data: abi.encodeWithSelector(HypernativeGuard.activateRevokeTimelock.selector),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
@@ -719,11 +720,11 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateGuardDisableTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateGuardDisableRevokeTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(hypernativeGuard),
             value: 0,
-            data: abi.encodeWithSelector(HypernativeGuard.disableTimelock.selector),
+            data: abi.encodeWithSelector(HypernativeGuard.disableRevokeTimelock.selector),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
