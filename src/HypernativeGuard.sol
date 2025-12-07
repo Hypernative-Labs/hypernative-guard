@@ -207,12 +207,14 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         
         revokingHash = getPrivilegedOperationHash(
             safeAddress,
-            abi.encodeWithSelector(GuardManager.setGuard.selector)
+            abi.encodeWithSelector(GuardManager.setGuard.selector),
+            Enum.Operation.Call
         );
 
         enablePassThroughModeHash = getPrivilegedOperationHash(
             address(this),
-            abi.encodeWithSelector(this.enablePassThroughMode.selector)
+            abi.encodeWithSelector(this.enablePassThroughMode.selector),
+            Enum.Operation.Call
         );
 
         activateRevokeTimelockHash = getNonceFreeTransactionHash(
@@ -383,7 +385,8 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         
         bytes32 privilegedOperationHash = getPrivilegedOperationHash(
             to,
-            data
+            data,
+            operation
         );
 
         // skip ECDSA recovery for empty keeper signatures to save gas
@@ -738,13 +741,15 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      */
     function getPrivilegedOperationHash(
         address to,
-        bytes memory data
+        bytes memory data,
+        Enum.Operation operation
     ) public view returns (bytes32) {
         bytes memory functionSelector = getFunctionSelector(data);
         return keccak256(
             abi.encode(
                 to,
-                functionSelector
+                functionSelector,
+                operation
             )
         );
     }
