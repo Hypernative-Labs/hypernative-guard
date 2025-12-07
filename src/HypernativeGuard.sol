@@ -584,7 +584,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
      */
     function revokeKeeperRole(address _keeper) public onlyGuardedSafe {
         require(hasRole(KEEPER_ROLE, _keeper), KeeperNotFound());
-        require(getRoleMemberCount(KEEPER_ROLE) > 0, AtLeastOneKeeperRequired());
+        require(getRoleMemberCount(KEEPER_ROLE) > 1, AtLeastOneKeeperRequired());
         _revokeRole(KEEPER_ROLE, _keeper);
     }
 
