@@ -79,7 +79,17 @@ A special operational mode that:
 - Can be disabled immediately by keeper or Safe
 - Useful for emergency recovery or transitioning away from the guard
 
-#### 4. Timelock Mechanisms
+#### 4. Privileged Operations Protection
+
+Critical operations are protected through a specialized hash mechanism that ensures they're detected regardless of how they're executed:
+
+- **Privileged Operation Hash**: A simplified hash that includes only the target address, 4-byte function selector, and operation type
+- **Protected Operations**:
+  - `setGuard()`: Removing or changing the guard (requires timelock)
+  - `enablePassThroughMode()`: Entering unrestricted mode (requires timelock)
+- **Why This Matters**: By excluding transaction parameters like value, gas settings, and function arguments, the guard can reliably identify critical operations even if wrapped or executed with different parameters
+
+#### 5. Timelock Mechanisms
 
 Two independent timelock systems protect critical operations:
 
@@ -88,7 +98,7 @@ Two independent timelock systems protect critical operations:
 
 Both can be activated and disabled only by the Safe itself, ensuring that even compromised keepers cannot immediately disable security protections.
 
-#### 5. Extensible Policy System
+#### 6. Extensible Policy System
 
 The guard supports dynamic addition of policy extensions through `IGuardPolicyExtension`:
 
@@ -131,12 +141,15 @@ The guard supports dynamic addition of policy extensions through `IGuardPolicyEx
 ┌─────────────────────────────────────────────────────────────┐
 │  Validate transaction approval:                             │
 │                                                             │
-│  1. Is it revocation with valid timelock?         ──YES──┐  │
-│  2. Is it pass-through enable with timelock?      ──YES──┤  │
-│  3. Does keeper signature match keeper role?      ──YES──┤  │
-│  4. Is transaction hash pre-approved?             ──YES──┼──▶ Execute
-│  5. Is nonce-free hash pre-approved?              ──YES──┤  │
-│  6. Is function call hash pre-approved?           ──YES──┘  │
+│  1. Check privileged operation hash:                        │
+│     - Is it guard revocation with valid timelock?  ──YES──┐ │
+│     - Is it pass-through enable with timelock?     ──YES──┤ │
+│                                                           │ │
+│  2. Standard approval checks:                             │ │
+│     - Does keeper signature match keeper role?     ──YES──┤ │
+│     - Is transaction hash pre-approved?            ──YES──┼─▶ Execute
+│     - Is nonce-free hash pre-approved?             ──YES──┤ │
+│     - Is function call hash pre-approved?          ──YES──┘ │
 │                                                             │
 │               All checks failed?                  ──YES──┐  │
 │                                                          │  │
@@ -175,6 +188,12 @@ getNonceFreeTransactionHash(to, value, data, operation, safeTxGas, baseGas, gasP
 
 // Function call hash (only 4-byte selector + params)
 getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver)
+
+// Privileged operation hash (for critical operations)
+// Includes only: target address, 4-byte function selector, operation type
+// Excludes: value, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, function parameters
+// Used internally for detecting critical operations like setGuard and enablePassThroughMode
+getPrivilegedOperationHash(to, data, operation)
 ```
 
 ### IGuardPolicyExtension.sol
