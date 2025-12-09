@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import {ISafe, Enum} from "./interfaces/ISafe.sol";
-import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
+import {IGuardPolicyExtension, Transaction, SignatureParams} from "./IGuardPolicyExtension.sol";
 import {BaseTransactionGuard, ITransactionGuard, GuardManager} from "@safe/contracts/base/GuardManager.sol";
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -277,47 +277,46 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         }
 
         // context is being ignored for now, and reserved for potential future use
-        (bytes memory keeperSignature, ) = _extractSignatureComponents(signatures);
+        (SignatureParams memory signatureParams) = _extractSignatureComponents(signatures);
+
+        Transaction memory txn = Transaction({
+            to: to,
+            value: value,
+            data: data,
+            operation: operation,
+            safeTxGas: safeTxGas,
+            baseGas: baseGas,
+            gasPrice: gasPrice,
+            gasToken: gasToken,
+            refundReceiver: refundReceiver,
+            executor: executor
+        });
 
         // process policy extensions
         for (uint256 i = 0; i < policyExtensions.length(); ++i) {
             IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
-                to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures, executor
+                txn,
+                signatureParams
             );
         }   
-        _validateTransactionApproval(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, keeperSignature);
-    }
-
-    /**
-     * @dev Checks if the keeper signature is valid
-     * @param txHash The hash of the transaction
-     * @param keeperSignature The keeper signature
-     */
-    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view returns (bool isValidKeeperSignature) {
-        // Skip ECDSA recovery for empty keeper signatures to save gas
-        if (bytes32(keeperSignature) == bytes32(0)) {
-            return false;
-        }
-        (address signer, ECDSA.RecoverError err, ) = ECDSA.tryRecover(txHash, keeperSignature);
-        isValidKeeperSignature = hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError;
+        _validateTransactionApproval(txn, signatureParams.keeperSignature);
     }
 
     /**
      * @dev Extracts keeper signature and context from signatures bytes
      * @dev that assumes the following format of the signatures field: [signatures][keeperSignature: 65 bytes][context: contextLength bytes][contextLength: bytes32]
      * @param signatures The full signatures bytes with appended keeper signature and context
-     * @return keeperSignature The 65-byte keeper signature
-     * @return context The context bytes
+     * @return signatureParams The signature parameters
      */
     function _extractSignatureComponents(bytes calldata signatures)
         internal
         pure
-        returns (bytes memory keeperSignature, bytes memory context) {
+        returns (SignatureParams memory signatureParams) {
         
         uint256 signaturesLength = signatures.length;
         // Minimum length: 65 bytes (keeper sig) + 32 bytes (context length) = 97 bytes  
         if (signaturesLength < 97) {
-            return (new bytes(0), new bytes(0));
+            return (SignatureParams(new bytes(0), new bytes(0)));
         }
         
         // Read context length from the last 32 bytes
@@ -326,67 +325,39 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         // Validate: total length must be at least 65 (keeper) + contextLength + 32 (length field)
         // Which means: contextLength must be <= signatures.length - 97
         if (contextLength > signaturesLength - 97) {
-            return (new bytes(0), new bytes(0));
+            return (SignatureParams(new bytes(0), new bytes(0)));
         }
         
         // Now safe to calculate indices
         uint256 contextStartIndex = signaturesLength - 32 - contextLength;
         uint256 keeperSignatureStartIndex = contextStartIndex - 65;
         
-        keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
-        context = signatures[contextStartIndex : signaturesLength - 32];
-    }
-
-    /**
-     * @dev Checks if a timelock is properly triggered and expired
-     * @param timelockExpiry The timestamp when the timelock expires
-     * @param timelockTriggered Whether the timelock has been triggered
-     */
-    function _checkTimelock(uint256 timelockExpiry, bool timelockTriggered) internal view {
-        require(timelockExpiry > 0 && timelockTriggered, TimelockNotTriggered());
-        require(block.timestamp > timelockExpiry, TimelockNotCompleted());
+        signatureParams.keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
+        signatureParams.context = signatures[contextStartIndex : signaturesLength - 32];
     }
 
     /**
      * @dev Validates transaction approval via hash checks or timelock
-     * @param to Destination address
-     * @param value Ether value
-     * @param data Transaction data
-     * @param operation Operation type
-     * @param safeTxGas Safe transaction gas
-     * @param baseGas Base gas
-     * @param gasPrice Gas price
-     * @param gasToken Gas token address
-     * @param refundReceiver Refund receiver address
+     * @param txn The transaction to validate
      * @param keeperSignature The keeper signature
      */
     function _validateTransactionApproval(
-        address to,
-        uint256 value,
-        bytes memory data,
-        Enum.Operation operation,
-        uint256 safeTxGas,
-        uint256 baseGas,
-        uint256 gasPrice,
-        address gasToken,
-        address refundReceiver,
+        Transaction memory txn,
         bytes memory keeperSignature
     ) internal view {
 
-        bytes32 txHash = getTransactionHash(
-            to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
-        );
+        bytes32 txHash = getTransactionHash(txn.to, txn.value, txn.data, txn.operation, txn.safeTxGas, txn.baseGas, txn.gasPrice, txn.gasToken, txn.refundReceiver, safe.nonce() - 1);
 
         bytes32 nonceFreeTxHash = getNonceFreeTransactionHash(
-            to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver
+            txn.to, txn.value, txn.data, txn.operation, txn.safeTxGas, txn.baseGas, txn.gasPrice, txn.gasToken, txn.refundReceiver
         );
         bytes32 functionCallTxHash =
-            getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
+            getFunctionCallHash(txn.to, txn.value, txn.data, txn.operation, txn.safeTxGas, txn.baseGas, txn.gasPrice, txn.gasToken, txn.refundReceiver);
         
         bytes32 privilegedOperationHash = getPrivilegedOperationHash(
-            to,
-            data,
-            operation
+            txn.to,
+            txn.data,
+            txn.operation
         );
 
         // skip ECDSA recovery for empty keeper signatures to save gas
@@ -415,7 +386,33 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
             revert UnapprovedHash();
         }
     }
+
+
+    /**
+     * @dev Checks if the keeper signature is valid
+     * @param txHash The hash of the transaction
+     * @param keeperSignature The keeper signature
+     */
+    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view returns (bool isValidKeeperSignature) {
+        // Skip ECDSA recovery for empty keeper signatures to save gas
+        if (bytes32(keeperSignature) == bytes32(0)) {
+            return false;
+        }
+        (address signer, ECDSA.RecoverError err, ) = ECDSA.tryRecover(txHash, keeperSignature);
+        isValidKeeperSignature = hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError;
+    }
     
+    /**
+     * @dev Checks if a timelock is properly triggered and expired
+     * @param timelockExpiry The timestamp when the timelock expires
+     * @param timelockTriggered Whether the timelock has been triggered
+     */
+    function _checkTimelock(uint256 timelockExpiry, bool timelockTriggered) internal view {
+        require(timelockExpiry > 0 && timelockTriggered, TimelockNotTriggered());
+        require(block.timestamp > timelockExpiry, TimelockNotCompleted());
+    }
+
+
     /**
      * @notice Required by the ITransactionGuard interface, called after transaction execution
      * @dev This function is a no-op in the current implementation
