@@ -17,10 +17,12 @@ contract HypernativeGuardTest is Test {
     MockPoolManager public poolManager;
     AddressZeroNotAllowedPolicy public addressZeroNotAllowedPolicy;
     bytes32 private _changeGuardHash;
+    bytes32 private constant OWNERS_SENTINEL_SLOT = 0xe90b7bceb6e7df5418fb78d8ee546e97c83a08bbccc01a0644d599ccd2a7c2e0;
 
     address internal keeperAddress;
     address internal signer1;
     address internal signer2;
+    Vm.Wallet internal newWallet;
 
     uint256 private _keeperPrivateKey;
     uint256 private _owner1PrivateKey;
@@ -39,16 +41,23 @@ contract HypernativeGuardTest is Test {
         // _owner1PrivateKey = vm.envUint("SIGNER1");
         // _owner2PrivateKey = vm.envUint("SIGNER2");
         _owner3PrivateKey = vm.envUint("SIGNER3");
+        newWallet = vm.createWallet("MOCK_SIGNER");
+        signer1 = newWallet.addr;
+        
+        
 
-        ownerPKs.push(_owner3PrivateKey);
-        //ownerPKs.push(_owner2PrivateKey);
-        signer1 = vm.addr(_owner3PrivateKey);
-        //signer2 = vm.addr(_owner2PrivateKey);
-        ownerAddresses[signer1] = signer1;
+        
+        vm.store(address(safe), OWNERS_SENTINEL_SLOT, bytes32(uint256(uint160(signer1))));
+        bytes32 newOwnerSlot = keccak256(abi.encode(signer1, 2)); // 2 is the owners sslot
+        // new owner in the owners mapping need to point to SENTINEL (0x1) which is the sentinel owner
+        vm.store(address(safe), newOwnerSlot, bytes32(uint256(uint160(address(0x1)))));   
+        
+        ownerPKs.push(newWallet.privateKey);
+        
         (keeperAddress, _keeperPrivateKey) = makeAddrAndKey("keeper");
-        //_keeperPrivateKey = 
-        //ownerAddresses[signer2] = signer2;
-        // the hash to revoke the guard
+        
+        
+        // the hash to revoke the guard (using privileged operation hash format)
         vm.deal(keeperAddress, 10 ether);
         vm.startPrank(keeperAddress);
         bytes memory setGuardData = abi.encodeWithSelector(GuardManager.setGuard.selector);
@@ -56,7 +65,7 @@ contract HypernativeGuardTest is Test {
             abi.encode(
                 address(safe),
                 0,
-                keccak256((getFunctionSelector(setGuardData))),
+                keccak256((setGuardData)),
                 Enum.Operation.Call,
                 0,
                 0,
@@ -65,7 +74,8 @@ contract HypernativeGuardTest is Test {
                 payable(0)
             )
         );
-        hypernativeGuard = new HypernativeGuard(address(safe), _changeGuardHash, keeperAddress);
+
+        hypernativeGuard = new HypernativeGuard(address(safe), keeperAddress);
         poolManager = new MockPoolManager(address(safe));
         addressZeroNotAllowedPolicy = new AddressZeroNotAllowedPolicy();
         vm.deal(address(safe), 1 ether);
@@ -236,7 +246,7 @@ contract HypernativeGuardTest is Test {
         // activate timelock
         activateTimelock();
         vm.warp(block.timestamp + 5 hours);
-        disableTimelock();
+        disableRevokeTimelock();
         vm.warp(block.timestamp + 2 days);
         withdrawEthReverts();
     }
@@ -589,7 +599,7 @@ contract HypernativeGuardTest is Test {
     }
 
     function activateTimelock() internal {
-        SigUtils.SafeTx memory safeTx = generateGuardTimelockTxToSign();
+        SigUtils.SafeTx memory safeTx = generateGuardRevokeTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
 
@@ -607,8 +617,8 @@ contract HypernativeGuardTest is Test {
         );
     }
 
-    function disableTimelock() internal {
-        SigUtils.SafeTx memory safeTx = generateGuardDisableTimelockTxToSign();
+    function disableRevokeTimelock() internal {
+        SigUtils.SafeTx memory safeTx = generateGuardDisableRevokeTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
         vm.stopPrank();
@@ -625,6 +635,14 @@ contract HypernativeGuardTest is Test {
             safeTx.refundReceiver,
             signatures
         );
+    }
+
+    function generateAndApproveEnablePassthroughTimelockTx() internal returns (SigUtils.SafeTx memory safeTx, bytes memory signatures) {
+        safeTx = generateActivatePassThroughTimelockTxToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        return (safeTx, signatures);
     }
 
     function generateAndApproveRevokeGuardTx()
@@ -670,11 +688,11 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateGuardTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateGuardRevokeTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(hypernativeGuard),
             value: 0,
-            data: abi.encodeWithSelector(HypernativeGuard.activateTimelock.selector),
+            data: abi.encodeWithSelector(HypernativeGuard.activateRevokeTimelock.selector),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
@@ -702,11 +720,11 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function generateGuardDisableTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+    function generateGuardDisableRevokeTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
         safeTx = SigUtils.SafeTx({
             to: address(hypernativeGuard),
             value: 0,
-            data: abi.encodeWithSelector(HypernativeGuard.disableTimelock.selector),
+            data: abi.encodeWithSelector(HypernativeGuard.disableRevokeTimelock.selector),
             operation: Enum.Operation.Call,
             safeTxGas: 0,
             baseGas: 0,
@@ -832,12 +850,43 @@ contract HypernativeGuardTest is Test {
         return safeTx;
     }
 
-    function test_EnablePassThroughMode() public {
-        hypernativeGuard.enablePassThroughMode();
-        SigUtils.SafeTx memory safeTx = generateWithdrawTxToSign();
+    function generateActivatePassThroughTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.activatePassThroughTimelock.selector),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    function generateEnablePassThroughTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.enablePassThroughMode.selector),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    function enablePassthroughTimelock() internal {
+        SigUtils.SafeTx memory safeTx = generateActivatePassThroughTimelockTxToSign();
         bytes32 digest = sigUtils.getTypedDataHash(safeTx);
         bytes memory signatures = signTransaction(digest);
-        // submit a tx when pass-through mode is enabled, so no need to approve the hash on the Guard
+
         safe.execTransaction(
             safeTx.to,
             safeTx.value,
@@ -850,6 +899,27 @@ contract HypernativeGuardTest is Test {
             safeTx.refundReceiver,
             signatures
         );
+    }
+
+    function test_EnablePassThroughMode() public {
+        
+        enablePassthroughTimelock();
+        vm.warp(block.timestamp + 2 days);
+        (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveEnablePassthroughTimelockTx();
+        
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+        test_WithdrawEth();
     }
 
     function signTransaction(bytes32 digest) internal view returns (bytes memory signatures) {
@@ -890,4 +960,494 @@ contract HypernativeGuardTest is Test {
     receive() external payable {
         console.log("received payment");
     }
+
+
+    // Test disablePassThroughTimelock
+    function test_DisablePassThroughTimelock() public {
+        testConfigureHypernativeGuard();
+        
+        // Activate pass-through timelock (need to approve since guard is active)
+        SigUtils.SafeTx memory activateTx = generateActivatePassThroughTimelockTxToSign();
+        bytes32 activateDigest = sigUtils.getTypedDataHash(activateTx);
+        bytes memory activateSignatures = signTransaction(activateDigest);
+        hypernativeGuard.approveHash(activateDigest);
+        
+        safe.execTransaction(
+            activateTx.to,
+            activateTx.value,
+            activateTx.data,
+            activateTx.operation,
+            activateTx.safeTxGas,
+            activateTx.baseGas,
+            activateTx.gasPrice,
+            activateTx.gasToken,
+            activateTx.refundReceiver,
+            activateSignatures
+        );
+        
+        // Verify timelock is triggered
+        assertTrue(hypernativeGuard.isPassThroughTimelockTriggered());
+        assertTrue(hypernativeGuard.getPassThroughTimelockBlock() > 0);
+        
+        // Disable the pass-through timelock
+        SigUtils.SafeTx memory safeTx = generateDisablePassThroughTimelockTxToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+        
+        // Verify timelock is disabled
+        assertFalse(hypernativeGuard.isPassThroughTimelockTriggered());
+        assertEq(hypernativeGuard.getPassThroughTimelockBlock(), 0);
+    }
+
+    function generateDisablePassThroughTimelockTxToSign() internal view returns (SigUtils.SafeTx memory safeTx) {
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.disablePassThroughTimelock.selector),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        return safeTx;
+    }
+
+    // Test CannotRevokeTimelockHashes error
+    function test_CannotRevokeTimelockHashes_ActivateHash() public {
+        bytes32 activateHash = hypernativeGuard.activateRevokeTimelockHash();
+        vm.expectRevert(HypernativeGuard.CannotRevokeTimelockHashes.selector);
+        hypernativeGuard.revokeNonceFreeHash(activateHash);
+    }
+
+    function test_CannotRevokeTimelockHashes_DisableHash() public {
+        bytes32 disableHash = hypernativeGuard.disableRevokeTimelockHash();
+        vm.expectRevert(HypernativeGuard.CannotRevokeTimelockHashes.selector);
+        hypernativeGuard.revokeNonceFreeHash(disableHash);
+    }
+
+    // Test PolicyExtensionNotValid error
+    function test_PolicyExtensionNotValid() public {
+        testConfigureHypernativeGuard();
+        
+        // Try to add an address that doesn't implement IGuardPolicyExtension
+        SigUtils.SafeTx memory safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.addPolicyExtension.selector, address(this)),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        vm.expectRevert();
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+    }
+
+    // Test PolicyExtensionAlreadyExists error
+    function test_PolicyExtensionAlreadyExists() public {
+        testConfigureHypernativeGuard();
+        
+        // Add policy first time
+        SigUtils.SafeTx memory safeTx = generateAddPolicyTransactionToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+        
+        // Try to add same policy again
+        safeTx = generateAddPolicyTransactionToSign();
+        digest = sigUtils.getTypedDataHash(safeTx);
+        signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        vm.expectRevert();
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+    }
+
+    // Test PolicyExtensionNotFound error
+    function test_PolicyExtensionNotFound() public {
+        testConfigureHypernativeGuard();
+        
+        // Try to remove a policy that was never added
+        SigUtils.SafeTx memory safeTx = generateRemovePolicyTransactionToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        vm.expectRevert();
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+    }
+
+    // Test ZeroAddress error in constructor
+    function test_ConstructorZeroAddressSafe() public {
+        vm.expectRevert(HypernativeGuard.ZeroAddress.selector);
+        new HypernativeGuard(address(0), keeperAddress);
+    }
+
+    function test_ConstructorZeroAddressKeeper() public {
+        vm.expectRevert(HypernativeGuard.ZeroAddress.selector);
+        new HypernativeGuard(address(safe), address(0));
+    }
+
+    // Test ZeroAddress error in grantKeeperRole
+    function test_GrantKeeperRoleZeroAddress() public {
+        testConfigureHypernativeGuard();
+        
+        SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign(address(0));
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        vm.expectRevert();
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+    }
+
+    // Test KeeperNotFound error
+    function test_RevokeKeeperRoleNotFound() public {
+        testConfigureHypernativeGuard();
+        
+        // First grant keeper to Safe so we have 2 keepers
+        SigUtils.SafeTx memory safeTx = generateGrantKeeperTxToSign(address(safe));
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+        
+        // Try to revoke a non-keeper address
+        safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.revokeKeeperRole.selector, address(0x1234)),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        digest = sigUtils.getTypedDataHash(safeTx);
+        signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        vm.expectRevert();
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+    }
+
+    // Test AtLeastOneKeeperRequired error
+    function test_AtLeastOneKeeperRequired() public {
+        testConfigureHypernativeGuard();
+        
+        // Try to revoke the only keeper
+        SigUtils.SafeTx memory safeTx = SigUtils.SafeTx({
+            to: address(hypernativeGuard),
+            value: 0,
+            data: abi.encodeWithSelector(HypernativeGuard.revokeKeeperRole.selector, keeperAddress),
+            operation: Enum.Operation.Call,
+            safeTxGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: address(0),
+            refundReceiver: payable(0),
+            nonce: safe.nonce()
+        });
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        vm.expectRevert();
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+    }
+
+    // Test view functions
+    function test_GetRevokeTimelockBlock() public {
+        assertEq(hypernativeGuard.getRevokeTimelockBlock(), 0);
+        
+        testConfigureHypernativeGuard();
+        activateTimelock();
+        
+        assertTrue(hypernativeGuard.getRevokeTimelockBlock() > block.timestamp);
+    }
+
+    function test_GetPassThroughTimelockBlock() public {
+        assertEq(hypernativeGuard.getPassThroughTimelockBlock(), 0);
+        
+        enablePassthroughTimelock();
+        
+        assertTrue(hypernativeGuard.getPassThroughTimelockBlock() > block.timestamp);
+    }
+
+    // Test supportsInterface
+    function test_SupportsInterface() public view {
+        // supportsInterface selector (ERC165)
+        assertTrue(hypernativeGuard.supportsInterface(hypernativeGuard.supportsInterface.selector));
+        
+        // Random selector should return false
+        bytes4 randomSelector = 0xdeadbeef;
+        assertFalse(hypernativeGuard.supportsInterface(randomSelector));
+    }
+
+    // Test onlyKeeper modifier with different functions
+    function test_OnlyKeeperApproveFunctionCallHash() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlyKeeper.selector);
+        hypernativeGuard.approveFunctionCallHash(bytes32(0));
+    }
+
+    function test_OnlyKeeperRevokeFunctionCallHash() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlyKeeper.selector);
+        hypernativeGuard.revokeFunctionCallHash(bytes32(0));
+    }
+
+    function test_OnlyKeeperRevokeHash() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlyKeeper.selector);
+        hypernativeGuard.revokeHash(bytes32(0));
+    }
+
+    function test_OnlyKeeperRevokeNonceFreeHash() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlyKeeper.selector);
+        hypernativeGuard.revokeNonceFreeHash(bytes32(0));
+    }
+
+    // Test onlyGuardedSafe modifier
+    function test_OnlyGuardedSafe_AddPolicyExtension() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.addPolicyExtension(address(addressZeroNotAllowedPolicy));
+    }
+
+    function test_OnlyGuardedSafe_EnablePassThroughMode() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.enablePassThroughMode();
+    }
+
+    function test_OnlyGuardedSafe_ActivatePassThroughTimelock() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.activatePassThroughTimelock();
+    }
+
+    function test_OnlyGuardedSafe_DisablePassThroughTimelock() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.disablePassThroughTimelock();
+    }
+
+    function test_OnlyGuardedSafe_ActivateRevokeTimelock() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.activateRevokeTimelock();
+    }
+
+    function test_OnlyGuardedSafe_DisableRevokeTimelock() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.disableRevokeTimelock();
+    }
+
+    function test_OnlyGuardedSafe_GrantKeeperRole() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.grantKeeperRole(address(1));
+    }
+
+    function test_OnlyGuardedSafe_RevokeKeeperRole() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.revokeKeeperRole(keeperAddress);
+    }
+
+    // Test onlyKeeperOrSafe modifier
+    function test_OnlyKeeperOrSafe_DisablePassThroughMode_AsKeeper() public {
+        // Already tested in setUp, keeper can call
+        hypernativeGuard.disablePassThroughMode();
+        assertFalse(hypernativeGuard.isPassThroughMode());
+    }
+
+    function test_OnlyKeeperOrSafe_DisablePassThroughMode_Unauthorized() public {
+        vm.stopPrank();
+        vm.prank(address(0x9999));
+        vm.expectRevert(HypernativeGuard.OnlyKeeperOrSafe.selector);
+        hypernativeGuard.disablePassThroughMode();
+    }
+
+    function test_OnlyKeeperOrSafe_RemovePolicyExtension_Unauthorized() public {
+        vm.stopPrank();
+        vm.prank(address(0x9999));
+        vm.expectRevert(HypernativeGuard.OnlyKeeperOrSafe.selector);
+        hypernativeGuard.removePolicyExtension(address(addressZeroNotAllowedPolicy));
+    }
+
+    // Test removePolicyExtension as keeper (not just Safe)
+    function test_RemovePolicyExtension_AsKeeper() public {
+        testConfigureHypernativeGuard();
+        
+        // Add policy via Safe
+        SigUtils.SafeTx memory safeTx = generateAddPolicyTransactionToSign();
+        bytes32 digest = sigUtils.getTypedDataHash(safeTx);
+        bytes memory signatures = signTransaction(digest);
+        hypernativeGuard.approveHash(digest);
+        
+        safe.execTransaction(
+            safeTx.to,
+            safeTx.value,
+            safeTx.data,
+            safeTx.operation,
+            safeTx.safeTxGas,
+            safeTx.baseGas,
+            safeTx.gasPrice,
+            safeTx.gasToken,
+            safeTx.refundReceiver,
+            signatures
+        );
+        
+        // Verify policy was added
+        address[] memory policies = hypernativeGuard.getPolicyExtensions();
+        assertEq(policies.length, 1);
+        
+        // Remove policy as keeper (not via Safe)
+        hypernativeGuard.removePolicyExtension(address(addressZeroNotAllowedPolicy));
+        
+        // Verify policy was removed
+        policies = hypernativeGuard.getPolicyExtensions();
+        assertEq(policies.length, 0);
+    }
+
+    // Test checkTransaction when not called by Safe
+    function test_CheckTransaction_OnlyGuardedSafe() public {
+        vm.stopPrank();
+        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
+        hypernativeGuard.checkTransaction(
+            address(0),
+            0,
+            "",
+            Enum.Operation.Call,
+            0,
+            0,
+            0,
+            address(0),
+            payable(0),
+            "",
+            address(0)
+        );
+    }
+
 }

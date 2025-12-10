@@ -2,9 +2,9 @@
 pragma solidity 0.8.28;
 
 import {ISafe, Enum} from "./interfaces/ISafe.sol";
-import {IGuardPolicyExtension} from "./IGuardPolicyExtension.sol";
-import {BaseTransactionGuard, ITransactionGuard} from "@safe/contracts/base/GuardManager.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {IGuardPolicyExtension, Transaction, SignatureParams} from "./IGuardPolicyExtension.sol";
+import {BaseTransactionGuard, ITransactionGuard, GuardManager} from "@safe/contracts/base/GuardManager.sol";
+import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -14,13 +14,14 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  * @notice A transaction guard for the Safe smart contract wallet that enforces transaction approval policies
  * @dev Extends BaseTransactionGuard and implements AccessControl for role-based management
  */
-contract HypernativeGuard is AccessControl, BaseTransactionGuard {
+contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     error OnlySafe();
     error OnlyKeeper();
     error OnlyKeeperOrSafe();
 
+    error InvalidKeeperSignature();
     error UnapprovedHash();
 
     error TimelockNotTriggered();
@@ -31,7 +32,9 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     error PolicyExtensionNotFound();
     error PolicyExtensionAlreadyExists();
 
-    error InvalidKeeperSignature();
+    error ZeroAddress();
+    error KeeperNotFound();
+    error AtLeastOneKeeperRequired();
 
     /// @notice Address of the Safe wallet this guard is attached to
     /// @dev Immutable and set during contract deployment
@@ -43,20 +46,39 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     /// @notice Role identifier for keeper accounts that can approve transactions
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
 
+    /**
+     * @dev The precomputed EIP-712 type hash for the Safe transaction type.
+     *      Precomputed value of: `keccak256("SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)")`.
+     */
+    bytes32 private constant SAFE_TX_TYPEHASH = 0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8;
+
+    /// @notice Cached domain separator for the Safe instance
+    /// @dev Computed once during construction to save gas on subsequent calls
+    bytes32 public immutable DOMAIN_SEPARATOR;
+
     /// @notice Hash used for revoking operations
     bytes32 public immutable revokingHash;
 
     /// @notice Hash for the timelock activation transaction
-    bytes32 public immutable activateTimelockHash;
+    bytes32 public immutable activateRevokeTimelockHash;
 
     /// @notice Hash for the timelock deactivation transaction
-    bytes32 public immutable disableTimelockHash;
+    bytes32 public immutable disableRevokeTimelockHash;
+
+    /// @notice Hash for enabling pass-through mode (requires timelock)
+    bytes32 public immutable enablePassThroughModeHash;
 
     /// @dev Timestamp when the timelock expires
-    uint256 internal timelockBlock;
+    uint256 internal revokeTimelockBlock;
 
     /// @notice Whether the timelock sequence has been triggered
-    bool public isTimelockTriggered;
+    bool public isRevokeTimelockTriggered;
+
+    /// @dev Timestamp when the pass-through timelock expires
+    uint256 internal passThroughTimelockBlock;
+
+    /// @notice Whether the pass-through timelock sequence has been triggered
+    bool public isPassThroughTimelockTriggered;
 
     /// @notice Whether the guard is in pass-through mode
     /// @dev If true, the guard will not enforce restriction on the transaction and will allow it to pass through
@@ -88,13 +110,25 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @notice Emitted when the timelock is activated
      * @param timestamp The timestamp when the timelock was activated
      */
-    event TimelockActivated(uint256 timestamp);
+    event RevokeTimelockActivated(uint256 timestamp);
 
     /**
      * @notice Emitted when the timelock is disabled
      * @param timestamp The timestamp when the timelock was disabled
      */
-    event TimelockDisabled(uint256 timestamp);
+    event RevokeTimelockDisabled(uint256 timestamp);
+
+    /**
+     * @notice Emitted when the pass-through timelock is activated
+     * @param timestamp The timestamp when the pass-through timelock was activated
+     */
+    event PassThroughTimelockActivated(uint256 timestamp);
+
+    /**
+     * @notice Emitted when the pass-through timelock is disabled
+     * @param timestamp The timestamp when the pass-through timelock was disabled
+     */
+    event PassThroughTimelockDisabled(uint256 timestamp);
 
     /**
      * @notice Emitted when a hash is approved
@@ -160,44 +194,56 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @notice Creates a new HypernativeGuard instance
      * @dev Sets up initial configurations, approves timelock transactions, and assigns the deployer as keeper
      * @param _safeAddress The address of the Safe this guard will protect
-     * @param _revokingHash The hash that identifies the HypernativeGuard revocation operations
      * @param _keeper The address of the keeper that will be granted the keeper role
      */
-    constructor(address _safeAddress, bytes32 _revokingHash, address _keeper) {
+    constructor(address _safeAddress, address _keeper) {
         _grantRole(KEEPER_ROLE, _keeper);
         isPassThroughMode = true;
+        require(_safeAddress != address(0), ZeroAddress());
+        require(_keeper != address(0), ZeroAddress());
         safeAddress = _safeAddress;
         safe = ISafe(safeAddress);
-        revokingHash = _revokingHash;
-        activateTimelockHash = keccak256(
-            abi.encode(
-                address(this),
-                0,
-                keccak256(abi.encodeWithSelector(this.activateTimelock.selector)),
-                Enum.Operation.Call,
-                0,
-                0,
-                0,
-                address(0),
-                payable(0)
-            )
+        DOMAIN_SEPARATOR = safe.domainSeparator();
+        
+        revokingHash = getPrivilegedOperationHash(
+            safeAddress,
+            abi.encodeWithSelector(GuardManager.setGuard.selector),
+            Enum.Operation.Call
         );
-        disableTimelockHash = keccak256(
-            abi.encode(
-                address(this),
-                0,
-                keccak256(abi.encodeWithSelector(this.disableTimelock.selector)),
-                Enum.Operation.Call,
-                0,
-                0,
-                0,
-                address(0),
-                payable(0)
-            )
+
+        enablePassThroughModeHash = getPrivilegedOperationHash(
+            address(this),
+            abi.encodeWithSelector(this.enablePassThroughMode.selector),
+            Enum.Operation.Call
         );
+
+        activateRevokeTimelockHash = getNonceFreeTransactionHash(
+            address(this),
+            0,
+            abi.encodeWithSelector(this.activateRevokeTimelock.selector),
+            Enum.Operation.Call,
+            0,
+            0,
+            0,
+            address(0),
+            payable(0)
+        );
+
+        disableRevokeTimelockHash = getNonceFreeTransactionHash(
+            address(this),
+            0,
+            abi.encodeWithSelector(this.disableRevokeTimelock.selector),
+            Enum.Operation.Call,
+            0,
+            0,
+            0,
+            address(0),
+            payable(0)
+        );
+
         // pre-approve timelock transaction hashes as nonce-free
-        approvedNonceFreeTxHashes[activateTimelockHash] = true;
-        approvedNonceFreeTxHashes[disableTimelockHash] = true;
+        approvedNonceFreeTxHashes[activateRevokeTimelockHash] = true;
+        approvedNonceFreeTxHashes[disableRevokeTimelockHash] = true;
     }
 
     /**
@@ -231,102 +277,106 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
         }
 
         // context is being ignored for now, and reserved for potential future use
-        (bytes memory keeperSignature, ) = _extractSignatureComponents(signatures);
+        (SignatureParams memory signatureParams) = _extractSignatureComponents(signatures);
+
+        Transaction memory txn = Transaction({
+            to: to,
+            value: value,
+            data: data,
+            operation: operation,
+            safeTxGas: safeTxGas,
+            baseGas: baseGas,
+            gasPrice: gasPrice,
+            gasToken: gasToken,
+            refundReceiver: refundReceiver,
+            executor: executor
+        });
 
         // process policy extensions
         for (uint256 i = 0; i < policyExtensions.length(); ++i) {
             IGuardPolicyExtension(policyExtensions.at(i)).checkPolicy(
-                to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures, executor
+                txn,
+                signatureParams
             );
-        }       
-
-        bytes32 txHash = safe.getTransactionHash(
-            to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, safe.nonce() - 1
-        );
-
-        // skip ECDSA recovery for empty keeper signatures to save gas
-        // forge-lint: disable-next-line(unsafe-typecast)
-        if (bytes32(keeperSignature) == bytes32(0)) {
-            _validateTransactionApproval(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, txHash);
-        }
-        else {
-            _checkKeeperSignature(txHash, keeperSignature);
-        }
-    }
-
-    /**
-     * @dev Checks if the keeper signature is valid
-     * @param txHash The hash of the transaction
-     * @param keeperSignature The keeper signature
-     */
-    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view {
-        (address signer, ECDSA.RecoverError err, ) = ECDSA.tryRecover(txHash, keeperSignature);
-        require(hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError, InvalidKeeperSignature());
+        }   
+        _validateTransactionApproval(txn, signatureParams.keeperSignature);
     }
 
     /**
      * @dev Extracts keeper signature and context from signatures bytes
      * @dev that assumes the following format of the signatures field: [signatures][keeperSignature: 65 bytes][context: contextLength bytes][contextLength: bytes32]
      * @param signatures The full signatures bytes with appended keeper signature and context
-     * @return keeperSignature The 65-byte keeper signature
-     * @return context The context bytes
+     * @return signatureParams The signature parameters
      */
     function _extractSignatureComponents(bytes calldata signatures)
         internal
         pure
-        returns (bytes memory keeperSignature, bytes memory context) {
+        returns (SignatureParams memory signatureParams) {
+        
+        uint256 signaturesLength = signatures.length;
+        // Minimum length: 65 bytes (keeper sig) + 32 bytes (context length) = 97 bytes  
+        if (signaturesLength < 97) {
+            return (SignatureParams(new bytes(0), new bytes(0)));
+        }
+        
         // Read context length from the last 32 bytes
-        uint256 contextLength = uint256(bytes32(signatures[signatures.length - 32:]));
+        uint256 contextLength = uint256(bytes32(signatures[signaturesLength - 32:]));
         
-        // Calculate where the context starts (and keeper signature ends)
-        uint256 contextStartIndex = signatures.length - 32 - contextLength;
+        // Validate: total length must be at least 65 (keeper) + contextLength + 32 (length field)
+        // Which means: contextLength must be <= signatures.length - 97
+        if (contextLength > signaturesLength - 97) {
+            return (SignatureParams(new bytes(0), new bytes(0)));
+        }
         
-        // Extract 65-byte keeper signature (immediately before context)
+        // Now safe to calculate indices
+        uint256 contextStartIndex = signaturesLength - 32 - contextLength;
         uint256 keeperSignatureStartIndex = contextStartIndex - 65;
-        keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
         
-        // Extract context bytes
-        context = signatures[contextStartIndex : signatures.length - 32];
+        signatureParams.keeperSignature = signatures[keeperSignatureStartIndex : contextStartIndex];
+        signatureParams.context = signatures[contextStartIndex : signaturesLength - 32];
     }
 
     /**
      * @dev Validates transaction approval via hash checks or timelock
-     * @param to Destination address
-     * @param value Ether value
-     * @param data Transaction data
-     * @param operation Operation type
-     * @param safeTxGas Safe transaction gas
-     * @param baseGas Base gas
-     * @param gasPrice Gas price
-     * @param gasToken Gas token address
-     * @param refundReceiver Refund receiver address
-     * @param txHash The regular transaction hash
+     * @param txn The transaction to validate
+     * @param keeperSignature The keeper signature
      */
     function _validateTransactionApproval(
-        address to,
-        uint256 value,
-        bytes memory data,
-        Enum.Operation operation,
-        uint256 safeTxGas,
-        uint256 baseGas,
-        uint256 gasPrice,
-        address gasToken,
-        address refundReceiver,
-        bytes32 txHash
+        Transaction memory txn,
+        bytes memory keeperSignature
     ) internal view {
+
+        bytes32 txHash = getTransactionHash(txn.to, txn.value, txn.data, txn.operation, txn.safeTxGas, txn.baseGas, txn.gasPrice, txn.gasToken, txn.refundReceiver, safe.nonce() - 1);
+
         bytes32 nonceFreeTxHash = getNonceFreeTransactionHash(
-            to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver
+            txn.to, txn.value, txn.data, txn.operation, txn.safeTxGas, txn.baseGas, txn.gasPrice, txn.gasToken, txn.refundReceiver
         );
         bytes32 functionCallTxHash =
-            getFunctionCallHash(to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver);
+            getFunctionCallHash(txn.to, txn.value, txn.data, txn.operation, txn.safeTxGas, txn.baseGas, txn.gasPrice, txn.gasToken, txn.refundReceiver);
+        
+        bytes32 privilegedOperationHash = getPrivilegedOperationHash(
+            txn.to,
+            txn.data,
+            txn.operation
+        );
 
-        // if the transaction is a Guard change or revoke operation, check timelock status
-        // the revokingHash was set during contract deployment and is used to identify these operations
-        if (functionCallTxHash == revokingHash) {
-            require(timelockBlock > 0 && isTimelockTriggered, TimelockNotTriggered());
-            require(block.timestamp > timelockBlock, TimelockNotCompleted());
+        // skip ECDSA recovery for empty keeper signatures to save gas
+        // forge-lint: disable-next-line(unsafe-typecast)
+        bool isValidKeeperSignature = _checkKeeperSignature(txHash, keeperSignature);
+
+        // Check timelock-protected operations
+        if (privilegedOperationHash == revokingHash) {
+            _checkTimelock(revokeTimelockBlock, isRevokeTimelockTriggered);
             return;
-        } else if (
+        }
+        else if (privilegedOperationHash == enablePassThroughModeHash) {
+            _checkTimelock(passThroughTimelockBlock, isPassThroughTimelockTriggered);
+            return;
+        }
+        else if (isValidKeeperSignature) {
+            return;
+        }
+        else if (
             approvedTxHashes[txHash] || approvedNonceFreeTxHashes[nonceFreeTxHash]
                 || approvedFunctionCallHashes[functionCallTxHash]
         ) {
@@ -336,7 +386,33 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
             revert UnapprovedHash();
         }
     }
+
+
+    /**
+     * @dev Checks if the keeper signature is valid
+     * @param txHash The hash of the transaction
+     * @param keeperSignature The keeper signature
+     */
+    function _checkKeeperSignature(bytes32 txHash, bytes memory keeperSignature) internal view returns (bool isValidKeeperSignature) {
+        // Skip ECDSA recovery for empty keeper signatures to save gas
+        if (bytes32(keeperSignature) == bytes32(0)) {
+            return false;
+        }
+        (address signer, ECDSA.RecoverError err, ) = ECDSA.tryRecover(txHash, keeperSignature);
+        isValidKeeperSignature = hasRole(KEEPER_ROLE, signer) && err == ECDSA.RecoverError.NoError;
+    }
     
+    /**
+     * @dev Checks if a timelock is properly triggered and expired
+     * @param timelockExpiry The timestamp when the timelock expires
+     * @param timelockTriggered Whether the timelock has been triggered
+     */
+    function _checkTimelock(uint256 timelockExpiry, bool timelockTriggered) internal view {
+        require(timelockExpiry > 0 && timelockTriggered, TimelockNotTriggered());
+        require(block.timestamp > timelockExpiry, TimelockNotCompleted());
+    }
+
+
     /**
      * @notice Required by the ITransactionGuard interface, called after transaction execution
      * @dev This function is a no-op in the current implementation
@@ -389,7 +465,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @param nonceFreeTxHash The nonce-free hash to revoke approval for
      */
     function revokeNonceFreeHash(bytes32 nonceFreeTxHash) public onlyKeeper {
-        if (nonceFreeTxHash == activateTimelockHash || nonceFreeTxHash == disableTimelockHash) {
+        if (nonceFreeTxHash == activateRevokeTimelockHash || nonceFreeTxHash == disableRevokeTimelockHash) {
             revert CannotRevokeTimelockHashes();
         }
         approvedNonceFreeTxHashes[nonceFreeTxHash] = false;
@@ -430,15 +506,6 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     }
 
     /**
-     * @notice Flips the pass-through mode
-     * @dev Can only be called by the keeper
-     */
-    function enablePassThroughMode() public onlyKeeper {
-        isPassThroughMode = true;
-        emit PassThroughModeEnabled();
-    }
-
-    /**
      * @notice Disables the pass-through mode
      * @dev Can only be called by the keeper
      */
@@ -448,23 +515,53 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     }
 
     /**
+     * @notice Enables the pass-through mode
+     * @dev Can only be called by the keeper
+     */
+    function enablePassThroughMode() public onlyGuardedSafe {
+        isPassThroughMode = true;
+        emit PassThroughModeEnabled();
+    }
+
+    /**
+     * @notice Activates the pass-through timelock sequence
+     * @dev Sets the pass-through timelock expiration time to 1 day from the current block timestamp
+     */
+    function activatePassThroughTimelock() public onlyGuardedSafe {
+        isPassThroughTimelockTriggered = true;
+        passThroughTimelockBlock = block.timestamp + 1 days;
+        emit PassThroughTimelockActivated(block.timestamp);
+    }
+
+    /**
+     * @notice Disables the pass-through timelock sequence
+     * @dev Can only be called by the Safe contract
+     */
+    function disablePassThroughTimelock() public onlyGuardedSafe {
+        isPassThroughTimelockTriggered = false;
+        passThroughTimelockBlock = 0;
+        emit PassThroughTimelockDisabled(block.timestamp);
+    }
+
+
+    /**
      * @notice Activates the timelock sequence
      * @dev Sets the timelock expiration time to 1 day from the current block timestamp
      */
-    function activateTimelock() public onlyGuardedSafe {
-        isTimelockTriggered = true;
-        timelockBlock = block.timestamp + 1 days;
-        emit TimelockActivated(block.timestamp);
+    function activateRevokeTimelock() public onlyGuardedSafe {
+        isRevokeTimelockTriggered = true;
+        revokeTimelockBlock = block.timestamp + 1 days;
+        emit RevokeTimelockActivated(block.timestamp);
     }
 
     /**
      * @notice Disables the timelock sequence
      * @dev Can only be called by the Safe contract
      */
-    function disableTimelock() public onlyGuardedSafe {
-        isTimelockTriggered = false;
-        timelockBlock = 0;
-        emit TimelockDisabled(block.timestamp);
+    function disableRevokeTimelock() public onlyGuardedSafe {
+        isRevokeTimelockTriggered = false;
+        revokeTimelockBlock = 0;
+        emit RevokeTimelockDisabled(block.timestamp);
     }
 
     /**
@@ -473,6 +570,7 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @param _keeper Address to grant the keeper role to
      */
     function grantKeeperRole(address _keeper) public onlyGuardedSafe {
+        require(_keeper != address(0), ZeroAddress());
         _grantRole(KEEPER_ROLE, _keeper);
     }
 
@@ -482,6 +580,8 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @param _keeper Address to revoke the keeper role from
      */
     function revokeKeeperRole(address _keeper) public onlyGuardedSafe {
+        require(hasRole(KEEPER_ROLE, _keeper), KeeperNotFound());
+        require(getRoleMemberCount(KEEPER_ROLE) > 1, AtLeastOneKeeperRequired());
         _revokeRole(KEEPER_ROLE, _keeper);
     }
 
@@ -490,8 +590,17 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      * @dev Returns 0 if the timelock is not currently triggered
      * @return The timestamp of the timelock expiration, or 0 if inactive
      */
-    function getTimelockBlock() public view returns (uint256) {
-        return isTimelockTriggered ? timelockBlock : 0;
+    function getRevokeTimelockBlock() public view returns (uint256) {
+        return revokeTimelockBlock;
+    }
+
+    /**
+     * @notice Returns the timestamp when the pass-through timelock expires
+     * @dev Returns 0 if the pass-through timelock is not currently triggered
+     * @return The timestamp of the pass-through timelock expiration, or 0 if inactive
+     */
+    function getPassThroughTimelockBlock() public view returns (uint256) {
+        return passThroughTimelockBlock;
     }
 
     /**
@@ -500,6 +609,51 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
      */
     function getPolicyExtensions() public view returns (address[] memory) {
         return policyExtensions.values();
+    }
+
+    /**
+     * @notice Computes the Safe transaction hash locally without an external call
+     * @dev Uses EIP-712 structured hashing, matching Safe's getTransactionHash implementation
+     * @param to Destination address
+     * @param value Ether value
+     * @param data Transaction data payload
+     * @param operation Operation type
+     * @param safeTxGas Gas that should be used for the safe transaction
+     * @param baseGas Gas costs for data used to trigger the safe transaction
+     * @param gasPrice Maximum gas price that should be used for this transaction
+     * @param gasToken Token address (or 0 if ETH) that is used for the payment
+     * @param refundReceiver Address of receiver of gas payment (or 0 if tx.origin)
+     * @param _nonce Transaction nonce
+     * @return Transaction hash computed using EIP-712
+     */
+    function getTransactionHash(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address refundReceiver,
+        uint256 _nonce
+    ) internal view returns (bytes32) {
+        bytes32 safeTxHash = keccak256(
+            abi.encode(
+                SAFE_TX_TYPEHASH,
+                to,
+                value,
+                keccak256(data),
+                operation,
+                safeTxGas,
+                baseGas,
+                gasPrice,
+                gasToken,
+                refundReceiver,
+                _nonce
+            )
+        );
+        return keccak256(abi.encodePacked(bytes1(0x19), bytes1(0x01), DOMAIN_SEPARATOR, safeTxHash));
     }
 
     /**
@@ -557,16 +711,12 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
         address gasToken,
         address refundReceiver
     ) public pure returns (bytes32) {
-        bytes memory functionSelector = new bytes(4);
-        assembly {
-            let selectorData := mload(add(data, 0x20))
-            mstore(add(functionSelector, 0x20), selectorData)
-        }
+        bytes memory functionSelector = getFunctionSelector(data);
         return keccak256(
             abi.encode(
                 to,
                 value,
-                keccak256(functionSelector),
+                functionSelector,
                 operation,
                 safeTxGas,
                 baseGas,
@@ -578,6 +728,39 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     }
 
     /**
+     * @notice Computes a privileged operation hash that only includes essential parameters
+     * @dev This hash excludes Safe execution parameters (safeTxGas, baseGas, gasPrice, gasToken, refundReceiver)
+     *      as well as value and operation to ensure privileged operations are detected regardless of how they're executed.
+     *      Used for critical operations like setGuard, revokeKeeperRole, enablePassThroughMode, etc.
+     * @param to Destination address
+     * @param data Transaction data payload (includes function selector and parameters)
+     * @return Hash based only on the target address and function call data
+     */
+    function getPrivilegedOperationHash(
+        address to,
+        bytes memory data,
+        Enum.Operation operation
+    ) public pure returns (bytes32) {
+        bytes memory functionSelector = getFunctionSelector(data);
+        return keccak256(
+            abi.encode(
+                to,
+                functionSelector,
+                operation
+            )
+        );
+    }
+
+    function getFunctionSelector(bytes memory data) internal pure returns (bytes memory) {
+        bytes memory functionSelector = new bytes(4);
+        assembly {
+            let selectorData := mload(add(data, 0x20))
+            mstore(add(functionSelector, 0x20), selectorData)
+        }
+        return functionSelector;
+    }
+
+    /**
      * @notice Checks if this contract supports a given interface
      * @dev Overrides implementation from both parent contracts
      * @param interfaceId Interface identifier (4 bytes)
@@ -586,10 +769,10 @@ contract HypernativeGuard is AccessControl, BaseTransactionGuard {
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(AccessControl, BaseTransactionGuard)
+        override(AccessControlEnumerable, BaseTransactionGuard)
         returns (bool)
     {
         return super.supportsInterface(interfaceId)
-            || AccessControl.supportsInterface(interfaceId);
+            || AccessControlEnumerable.supportsInterface(interfaceId);
     }
 }
