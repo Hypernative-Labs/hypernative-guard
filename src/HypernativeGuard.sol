@@ -740,7 +740,7 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         address to,
         bytes memory data,
         Enum.Operation operation
-    ) public view returns (bytes32) {
+    ) public pure returns (bytes32) {
         bytes memory functionSelector = getFunctionSelector(data);
         return keccak256(
             abi.encode(
