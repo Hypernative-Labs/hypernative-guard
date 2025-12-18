@@ -1430,24 +1430,4 @@ contract HypernativeGuardTest is Test {
         policies = hypernativeGuard.getPolicyExtensions();
         assertEq(policies.length, 0);
     }
-
-    // Test checkTransaction when not called by Safe
-    function test_CheckTransaction_OnlyGuardedSafe() public {
-        vm.stopPrank();
-        vm.expectRevert(HypernativeGuard.OnlySafe.selector);
-        hypernativeGuard.checkTransaction(
-            address(0),
-            0,
-            "",
-            Enum.Operation.Call,
-            0,
-            0,
-            0,
-            address(0),
-            payable(0),
-            "",
-            address(0)
-        );
-    }
-
 }

@@ -271,8 +271,8 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
         address payable refundReceiver,
         bytes calldata signatures,
         address executor
-    ) external view override onlyGuardedSafe {
-        if (isPassThroughMode) {
+    ) external view override  {
+        if (isPassThroughMode || msg.sender != safeAddress) {
             return;
         }
 
