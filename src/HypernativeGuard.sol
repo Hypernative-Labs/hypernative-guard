@@ -525,11 +525,11 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
 
     /**
      * @notice Activates the pass-through timelock sequence
-     * @dev Sets the pass-through timelock expiration time to 1 day from the current block timestamp
+     * @dev Sets the pass-through timelock expiration time to 10 days from the current block timestamp
      */
     function activatePassThroughTimelock() public onlyGuardedSafe {
         isPassThroughTimelockTriggered = true;
-        passThroughTimelockBlock = block.timestamp + 1 days;
+        passThroughTimelockBlock = block.timestamp + 10 days;
         emit PassThroughTimelockActivated(block.timestamp);
     }
 
@@ -546,11 +546,11 @@ contract HypernativeGuard is AccessControlEnumerable, BaseTransactionGuard {
 
     /**
      * @notice Activates the timelock sequence
-     * @dev Sets the timelock expiration time to 1 day from the current block timestamp
+     * @dev Sets the timelock expiration time to 10 days from the current block timestamp
      */
     function activateRevokeTimelock() public onlyGuardedSafe {
         isRevokeTimelockTriggered = true;
-        revokeTimelockBlock = block.timestamp + 1 days;
+        revokeTimelockBlock = block.timestamp + 10 days;
         emit RevokeTimelockActivated(block.timestamp);
     }
 

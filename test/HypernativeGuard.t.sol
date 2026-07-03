@@ -255,7 +255,7 @@ contract HypernativeGuardTest is Test {
         testConfigureHypernativeGuard();
         activateTimelock();
         (SigUtils.SafeTx memory safeTx, bytes memory signatures) = generateAndApproveRevokeGuardTx();
-        vm.warp(block.timestamp + 4 days);
+        vm.warp(block.timestamp + 11 days);
         safe.execTransaction(
             safeTx.to,
             safeTx.value,
