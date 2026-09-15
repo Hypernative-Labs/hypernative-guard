@@ -258,12 +258,28 @@ The `_extractSignatureComponents()` function safely parses this format with unde
 
 ## Security Model
 
+### Enforcement Boundary
+
+Safe has two execution paths: `execTransaction`, which the transaction guard governs, and
+`execTransactionFromModule`, which is authorized by the module itself. Enabling a module is itself a
+Safe transaction and therefore requires approval through the Guard, but once enabled a module
+transacts under its own logic; through Safe version 1.4.1 the module path has no guard mechanism of
+its own. The module set is consequently part of the Safe's trusted configuration: it is reviewed
+before the Guard is installed and monitored thereafter.
+
 ### Trust Assumptions
 
 1. **Safe Owners**: Control guard configuration but constrained by 1-day timelocks for critical operations
-2. **Keepers**: Trusted to approve legitimate transactions in real-time
+2. **Keepers**: Trusted to approve legitimate transactions in real-time. A keeper must not also be a Safe owner (see below)
 3. **Policy Extensions**: Can only blacklist/block transactions (cannot whitelist). Should be audited before addition 
 4. **Timelock Period**: 1 day assumed sufficient for detection and response
+5. **Safe Modules**: Any enabled module transacts under its own logic rather than through the guard. The module set is part of the Safe's trusted configuration (see [Enforcement Boundary](#enforcement-boundary))
+
+#### Keepers must not be Safe owners
+
+The guard acts as a second factor: a transaction needs owner consent and, independently, keeper
+approval. If an owner also holds `KEEPER_ROLE`, that single party provides both, and the guard adds
+nothing beyond the Safe's own threshold.
 
 
 ### Critical Operations
@@ -286,7 +302,6 @@ This ensures that even if a keeper's key is compromised, critical security param
 // 1. Deploy guard
 HypernativeGuard guard = new HypernativeGuard(
     safeAddress,
-    revokingHash,
     keeperAddress
 );
 
